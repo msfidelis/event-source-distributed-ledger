@@ -28,6 +28,7 @@ services:
     container_name: eventsourcing-balance-ingestion
     environment:
       KAFKA_BROKERS: kafka:29092
+      SCYLLA_HOSTS: balance-scylla:9042
       PORT: 8082
     ports:
       - "8082:8082"
@@ -36,7 +37,7 @@ services:
     networks:
       - eventsourcing-network
     depends_on:
-      postgres:
+      balance-scylla:
         condition: service_healthy
       kafka:
         condition: service_healthy
@@ -44,6 +45,18 @@ services:
 
   balance-scylla:
     image: scylladb/scylla:2025.3
+    container_name: eventsourcing-balance-scylla
+    ports:
+      - "9042:9042"
+    networks:
+      - eventsourcing-network
+    command: --smp 1 --memory 512M
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   simulador:
     build:

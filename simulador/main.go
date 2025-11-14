@@ -124,7 +124,7 @@ func criarContas(ctx context.Context, producer *kafka.Producer, quantidade int) 
 			continue
 		}
 
-		log.Printf("✅ Conta criada: %s - %s (Saldo: R$ %.2f)",
+		log.Printf("Conta criada: %s - %s (Saldo: R$ %.2f)",
 			contaID, evento.NomeProprietario, evento.SaldoInicial)
 	}
 
@@ -134,7 +134,7 @@ func criarContas(ctx context.Context, producer *kafka.Producer, quantidade int) 
 func simularMovimentacoes(ctx context.Context, producer *kafka.Producer, contas []uuid.UUID) {
 	rand.Seed(time.Now().UnixNano())
 
-	totalMovimentacoes := 100
+	totalMovimentacoes := 10000
 	numWorkers := 10 // 10 goroutines paralelas
 
 	// Canal para distribuir trabalho
