@@ -1,0 +1,153 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: eventsourcing-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: eventsourcing
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - eventsourcing-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  balance-ingestion:
+    build:
+      context: ./balance
+      dockerfile: Dockerfile.dev
+    container_name: eventsourcing-balance-ingestion
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      PORT: 8082
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./balance:/app
+    networks:
+      - eventsourcing-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    command: air -c .air.toml
+
+  balance-scylla:
+    image: scylladb/scylla:2025.3
+
+  simulador:
+    build:
+      context: ./simulador
+      dockerfile: Dockerfile.dev
+    container_name: eventsourcing-simulador
+    environment:
+      KAFKA_BROKERS: kafka:29092
+    volumes:
+      - ./simulador:/app
+    networks:
+      - eventsourcing-network
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: air -c .air.toml
+
+  ledger:
+    build:
+      context: ./ledger
+      dockerfile: Dockerfile.dev
+    container_name: eventsourcing-ledger
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/eventsourcing?sslmode=disable
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_DB: eventsourcing
+
+      KAFKA_BROKERS: kafka:29092
+      PORT: 8081
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./ledger:/app
+    networks:
+      - eventsourcing-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    command: air -c .air.toml
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      # KRaft settings
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      
+      # Listeners
+      KAFKA_LISTENERS: 'PLAINTEXT://kafka:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://kafka:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      
+      # Cluster settings
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+      
+      # Log settings
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+    volumes:
+      - kafka-data:/tmp/kraft-combined-logs
+    networks:
+      - eventsourcing-network
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - eventsourcing-network
+
+
+volumes:
+  postgres_data:
+  kafka-data:
+
+networks:
+  eventsourcing-network:
+    driver: bridge
