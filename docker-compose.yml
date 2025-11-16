@@ -21,6 +21,32 @@ services:
       timeout: 5s
       retries: 5
 
+  kong:
+    image: kong:3.4
+    container_name: kong-gateway
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /kong/kong.yml
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001
+      KONG_ADMIN_GUI_URL: http://localhost:8002
+    ports:
+      - "8000:8000"   # Kong Proxy
+      - "8001:8001"   # Kong Admin API
+      - "8002:8002"   # Kong Manager (GUI)
+    volumes:
+      - ./kong/kong.yml:/kong/kong.yml:ro
+    networks:
+      - eventsourcing-network
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   balance-api:
     build:
       context: ./balance-api
@@ -78,6 +104,66 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+
+  statements-mongo:
+    image: mongo:7-jammy
+    container_name: statements-mongo
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: extrato
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - eventsourcing-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  statements-ingestion:
+    build:
+      context: ./statement
+      dockerfile: Dockerfile.dev
+    container_name: eventsourcing-statements-ingestion
+    environment:
+      MONGODB_HOSTS: statements-mongo:27017
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_STATEMENTS_TOPIC: ledger_nova_transacao_confirmada
+      PORT: 8084
+    ports:
+      - "8084:8084"
+    volumes:
+      - ./statement:/app
+    networks:
+      - eventsourcing-network
+    depends_on:
+      statements-mongo:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    command: air -c .air.toml
+
+
+  statements-api:
+    build:
+      context: ./statement-api
+      dockerfile: Dockerfile.dev
+    container_name: eventsourcing-statements-api
+    environment:
+      MONGODB_HOSTS: statements-mongo:27017
+      PORT: 8085
+    ports:
+      - "8085:8085"
+    volumes:
+      - ./statement-api:/app
+    networks:
+      - eventsourcing-network
+    depends_on:
+      statements-mongo:
+        condition: service_healthy
+    command: air -c .air.toml
 
   simulador:
     build:
@@ -181,6 +267,7 @@ services:
 volumes:
   postgres_data:
   kafka-data:
+  mongo_data:
 
 networks:
   eventsourcing-network:
