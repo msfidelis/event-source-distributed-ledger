@@ -82,7 +82,7 @@ func main() {
 	contas := criarContas(ctx, producerContas, 10)
 
 	log.Println("\nAguardando contas serem processadas...")
-	time.Sleep(2 * time.Second)
+	time.Sleep(10 * time.Second)
 
 	// Fase 2: Simular movimentações
 	log.Println("\nFase 2: Simulando movimentações em alta performance...")

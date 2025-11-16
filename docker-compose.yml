@@ -21,6 +21,27 @@ services:
       timeout: 5s
       retries: 5
 
+  balance-api:
+    build:
+      context: ./balance-api
+      dockerfile: Dockerfile.dev
+    container_name: eventsourcing-balance-api
+    environment:
+      SCYLLA_HOSTS: balance-scylla:9042
+      PORT: 8083
+    ports:
+      - "8083:8083"
+    volumes:
+      - ./balance-api:/app
+    networks:
+      - eventsourcing-network
+    depends_on:
+      balance-scylla:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    command: air -c .air.toml
+
   balance-ingestion:
     build:
       context: ./balance
