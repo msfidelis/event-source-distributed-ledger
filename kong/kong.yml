@@ -1,0 +1,22 @@
+# kong.yml
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: balance-service
+    url: http://balance-api:8083/balance
+    routes:
+      - name: balance-route
+        paths:
+          - /api/v1/balance
+        strip_path: true      
+        path_handling: v1
+
+  - name: statements-service
+    url: http://statements-api:8085/statements
+    routes:
+      - name: statements-route
+        paths:
+          - /api/v1/statements
+        strip_path: true     
+        path_handling: v1
