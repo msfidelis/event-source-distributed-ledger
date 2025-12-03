@@ -42,6 +42,11 @@ Fluxo de alto nível:
 
 ## 2. Fluxos transacionais detalhados
 
+### Arquitetura do Ledger (Ingestão, Calculo e Dispatch)
+
+<img width="1006" height="588" alt="event-bus drawio(2)" src="https://github.com/user-attachments/assets/5182c305-5b19-4348-9764-7d1d6a582795" />
+
+
 ### Fluxo Transacional Completo 
 
 ```mermaid
