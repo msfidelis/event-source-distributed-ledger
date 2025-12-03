@@ -203,6 +203,10 @@ Consumo downstream:
 ## 5. Read models e patterns de ingestão
 
 ### Balance (ScyllaDB)
+
+<img width="1036" height="663" alt="ledger-Saldo" src="https://github.com/user-attachments/assets/f0562e44-7e90-4349-8e31-d318605a07aa" />
+
+
 - Keyspace: `balance_ks`
 - Table: `balances` (id UUID PRIMARY KEY, balance DOUBLE, version INT)
 
@@ -213,6 +217,9 @@ Ingestão:
 - Tradeoff: LWT tem custo de performance (Paxos), mas garante ordenação e consistência para esse read model
 
 ### Statement (MongoDB)
+
+<img width="1036" height="663" alt="ledger-Extrato" src="https://github.com/user-attachments/assets/301a13ed-0b7b-4d29-ad10-8c93f851781e" />
+
 - Database: `extrato`
 - Collection: `transactions`
 - Documento por transação; `_id = movimentacao_id` (UUID string)
