@@ -46,6 +46,7 @@ type KafkaConfig struct {
 	TopicNovaContaRegistrada     string
 	TopicNovaTransacaoConfirmada string
 	TopicSaldoAtualizado         string
+	TopicTransacaoRateLimited    string
 
 	// Consumer Groups
 	GroupAccountListener     string
@@ -88,6 +89,7 @@ func Load() *Config {
 			TopicNovaContaRegistrada:     getEnv("KAFKA_TOPIC_NOVA_CONTA_REGISTRADA", "ledger_nova_conta_registrada"),
 			TopicNovaTransacaoConfirmada: getEnv("KAFKA_TOPIC_NOVA_TRANSACAO_CONFIRMADA", "ledger_nova_transacao_confirmada"),
 			TopicSaldoAtualizado:         getEnv("KAFKA_TOPIC_SALDO_ATUALIZADO", "ledger_saldo_atualizado"),
+			TopicTransacaoRateLimited:    getEnv("KAFKA_TOPIC_TRANSACAO_RATE_LIMITED", "ledger_transacao_ratelimited"),
 
 			// Consumer Groups
 			GroupAccountListener:     getEnv("KAFKA_GROUP_ACCOUNT", "ledger-account-group"),
@@ -100,7 +102,7 @@ func Load() *Config {
 			LogLevel:    getEnv("LOG_LEVEL", "info"),
 		},
 		RateLimit: RateLimitConfig{
-			Host: getEnv("RATE_LIMIT", "ratelimit:8080"),
+			Host: getEnv("RATE_LIMIT", "ratelimit:8081"),
 		},
 	}
 

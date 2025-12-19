@@ -1,6 +1,6 @@
-domain: ratelimit
+domain: ledger-transactions
 descriptors:
   - key: account
     rate_limit:
       unit: second
-      requests_per_unit: 10
+      requests_per_unit: 100

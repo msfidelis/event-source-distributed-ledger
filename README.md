@@ -297,6 +297,7 @@ Serviço principal de event sourcing que processa comandos e mantém o Event Sto
 | `KAFKA_TOPIC_NOVA_CONTA_REGISTRADA` | Tópico de saída para contas criadas | `ledger_nova_conta_registrada` | Não |
 | `KAFKA_TOPIC_NOVA_TRANSACAO_CONFIRMADA` | Tópico de saída para transações confirmadas | `ledger_nova_transacao_confirmada` | Não |
 | `KAFKA_TOPIC_SALDO_ATUALIZADO` | Tópico de saída para atualizações de saldo | `ledger_saldo_atualizado` | Não |
+| `KAFKA_TOPIC_TRANSACAO_RATE_LIMITED` | Tópico de saída para transações bloqueadas por rate limit | `ledger_transacao_ratelimited` | Não |
 | **Kafka Consumer Groups** |
 | `KAFKA_GROUP_ACCOUNT` | Consumer group para criação de contas | `ledger-account-group` | Não |
 | `KAFKA_GROUP_TRANSACTION` | Consumer group para movimentações | `ledger-transaction-group` | Não |
@@ -305,6 +306,8 @@ Serviço principal de event sourcing que processa comandos e mantém o Event Sto
 | `PORT` | Porta do servidor HTTP | `8081` | Não |
 | `ENVIRONMENT` | Ambiente de execução (development, production) | `development` | Não |
 | `LOG_LEVEL` | Nível de log (debug, info, warn, error) | `info` | Não |
+| **Rate Limiting** |
+| `RATELIMIT_SERVICE` | Host do Envoy Rate Limiter (gRPC) | `ratelimit:8080` | Não |
 
 ### 8.2 Balance Ingestion Service
 

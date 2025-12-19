@@ -9,6 +9,7 @@ import (
 
 	"ledger/internal/models"
 	"ledger/pkg/config"
+	"ledger/pkg/envoyratelimit"
 	"ledger/pkg/events"
 	"ledger/pkg/kafka"
 	"ledger/pkg/metrics"
@@ -19,29 +20,40 @@ import (
 
 // Listener processa eventos relacionados a transações
 type Listener struct {
-	db       *bun.DB
-	config   *config.Config
-	producer *kafka.Producer
+	db          *bun.DB
+	config      *config.Config
+	producer    *kafka.Producer
+	rateLimiter *envoyratelimit.Client
+	topic       string
 }
 
 // NewListener cria uma nova instância do TransactionListener
-func NewListener(db *bun.DB, cfg *config.Config) (*Listener, error) {
+func NewListener(db *bun.DB, topic string, cfg *config.Config) (*Listener, error) {
 	// Cria o produtor para publicar confirmações
 	producer, err := kafka.NewProducer(cfg.Kafka.Brokers)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao criar produtor: %w", err)
 	}
 
+	// Inicializa o cliente Rate Limiter (singleton)
+	rateLimiter, err := envoyratelimit.GetInstance(cfg.RateLimit.Host)
+	if err != nil {
+		log.Printf("[Transaction] Aviso: Rate Limiter não disponível: %v", err)
+		// Não retorna erro, permite continuar sem rate limiting
+	}
+
 	return &Listener{
-		db:       db,
-		config:   cfg,
-		producer: producer,
+		db:          db,
+		config:      cfg,
+		producer:    producer,
+		rateLimiter: rateLimiter,
+		topic:       topic,
 	}, nil
 }
 
 // StartConsuming inicia o consumidor Kafka para eventos de movimentação
 func (l *Listener) StartConsuming(ctx context.Context) error {
-	topic := l.config.Kafka.TopicContaMovimentacao
+	topic := l.topic
 	groupID := l.config.Kafka.GroupTransactionListener
 
 	log.Printf("[Transaction] Iniciando listener para tópico: %s (group: %s)", topic, groupID)
@@ -79,6 +91,25 @@ func (l *Listener) Handle(key, value []byte) error {
 	if err := json.Unmarshal(dataBytes, &movimentacao); err != nil {
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "unmarshal_data_error").Inc()
 		return fmt.Errorf("erro ao deserializar ContaMovimentacao: %w", err)
+	}
+
+	// Verifica rate limit se o cliente estiver disponível
+	if l.rateLimiter != nil {
+		ctxRL := context.Background()
+		allowed, err := l.rateLimiter.ShouldRateLimit(ctxRL, "ledger-transactions", "account", movimentacao.ContaID.String())
+		if err != nil {
+			log.Printf("[Transaction] Erro ao verificar rate limit: %v", err)
+			// Continua processamento em caso de erro no rate limiter
+		} else if !allowed {
+			metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "rate_limited").Inc()
+
+			// Publica evento no tópico de rate limited
+			if err := l.publishRateLimitedEvent(movimentacao, key, value); err != nil {
+				log.Printf("[Transaction] Erro ao publicar evento rate limited: %v", err)
+			}
+
+			return fmt.Errorf("requisição bloqueada por rate limit para conta: %s", movimentacao.ContaID)
+		}
 	}
 
 	ctx := context.Background()
@@ -173,6 +204,7 @@ func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.
 	if err != nil {
 		// Detecta conflitos de versão (optimistic locking)
 		if isVersionConflict(err) {
+			log.Printf("[Transaction] Version conflict: %v", aggregateID)
 			metrics.EventsVersionConflictsTotal.WithLabelValues(aggregateType).Inc()
 			metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "version_conflict").Inc()
 		} else {
@@ -326,6 +358,19 @@ func (l *Listener) publishBalanceUpdate(contaID uuid.UUID, balance float64, vers
 
 	log.Printf("[Transaction] Saldo atualizado publicado: conta_id=%s, balance=%.2f, version=%d",
 		contaID, balance, version)
+
+	return nil
+}
+
+func (l *Listener) publishRateLimitedEvent(mov events.ContaMovimentacao, key []byte, value []byte) error {
+	topic := l.config.Kafka.TopicTransacaoRateLimited
+	// Publica no tópico de transações bloqueadas por rate limit
+	if err := l.producer.Publish(topic, key, value); err != nil {
+		return fmt.Errorf("erro ao publicar no tópico %s: %w", topic, err)
+	}
+
+	log.Printf("[Transaction] Evento rate limited publicado no tópico %s: conta_id=%s, movimentacao_id=%s",
+		topic, mov.ContaID, mov.MovimentacaoID)
 
 	return nil
 }

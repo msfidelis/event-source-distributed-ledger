@@ -40,6 +40,8 @@ func newClient(addr string) (*Client, error) {
 
 	client := pb.NewRateLimitServiceClient(conn)
 
+	fmt.Printf("RateLimiter Conectado: %s\n", addr)
+
 	return &Client{
 		conn:   conn,
 		client: client,

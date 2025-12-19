@@ -49,10 +49,6 @@ services:
 
   ratelimit:
     image: envoyproxy/ratelimit:master
-    ports:
-      - "8080:8080"
-      - "8081:8081"
-      - "6070:6070"
     environment:
       - USE_STATSD=false
       - LOG_LEVEL=info
@@ -134,6 +130,7 @@ services:
       # Kafka Consumer Topics
       KAFKA_TOPIC_SALDO_ATUALIZADO: ledger_saldo_atualizado
       KAFKA_TOPIC_NOVA_CONTA_REGISTRADA: ledger_nova_conta_registrada
+      KAFKA_TOPIC_TRANSACAO_RATE_LIMITED: ledger_transacao_ratelimited
 
       # Kafka Consumer Groups
       KAFKA_GROUP_BALANCE: balance-ingestion-group
@@ -287,10 +284,10 @@ services:
       # Simulation Configuration
       SIM_NUM_CONTAS: 15
       SIM_CONTINUOUS_MODE: true
-      SIM_NUM_MOVIMENTACOES: 100
-      SIM_NUM_WORKERS: 1
-      SIM_EVENTS_PER_WORKER: 1
-      SIM_SLEEP_BETWEEN_EVENTS: 1s
+      SIM_NUM_MOVIMENTACOES: 100000
+      SIM_NUM_WORKERS: 6
+      SIM_EVENTS_PER_WORKER: 100
+      SIM_SLEEP_BETWEEN_EVENTS: 500ms
       SIM_CREDITO_PROBABILITY: 0.7
       SIM_TRANSFER_PROBABILITY: 0.2
       SIM_WAIT_AFTER_CREATE: 10s
@@ -341,7 +338,7 @@ services:
       KAFKA_GROUP_REHYDRATE: ledger-rehydrate-group
 
       # Rate Limiter
-      RATELIMIT_SERVICE: ratelimit:8080
+      RATELIMIT_SERVICE: ratelimit:8081
 
       # Application Configuration
       PORT: 8081

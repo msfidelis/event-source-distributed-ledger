@@ -59,7 +59,13 @@ func main() {
 	}
 
 	// Listeners de Transações
-	transactionListener, err := transaction.NewListener(bunDB, cfg)
+	transactionListener, err := transaction.NewListener(bunDB, cfg.Kafka.TopicContaMovimentacao, cfg)
+	if err != nil {
+		log.Fatal("Erro ao criar transaction listener:", err)
+	}
+
+	// Listener de Transações que toparam o rate limit
+	transactionRateLimitListener, err := transaction.NewListener(bunDB, cfg.Kafka.TopicTransacaoRateLimited, cfg)
 	if err != nil {
 		log.Fatal("Erro ao criar transaction listener:", err)
 	}
@@ -79,6 +85,12 @@ func main() {
 
 	go func() {
 		if err := transactionListener.StartConsuming(ctx); err != nil {
+			log.Printf("[Transaction] Erro no consumer: %v", err)
+		}
+	}()
+
+	go func() {
+		if err := transactionRateLimitListener.StartConsuming(ctx); err != nil {
 			log.Printf("[Transaction] Erro no consumer: %v", err)
 		}
 	}()
