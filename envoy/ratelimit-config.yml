@@ -1,0 +1,6 @@
+domain: ratelimit
+descriptors:
+  - key: account
+    rate_limit:
+      unit: second
+      requests_per_unit: 10

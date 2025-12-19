@@ -47,6 +47,35 @@ services:
       timeout: 10s
       retries: 3
 
+  ratelimit:
+    image: envoyproxy/ratelimit:master
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+      - "6070:6070"
+    environment:
+      - USE_STATSD=false
+      - LOG_LEVEL=info
+      - REDIS_SOCKET_TYPE=tcp
+      - REDIS_URL=redis:6379
+      - RUNTIME_ROOT=/data
+      - RUNTIME_SUBDIRECTORY=ratelimit
+      - RUNTIME_WATCH_ROOT=false
+    volumes:
+      - ./envoy:/data/ratelimit/config
+    networks:
+      - eventsourcing-network
+    depends_on:
+      - redis
+    command: /bin/ratelimit
+
+  redis:
+    image: redis:7.2.4
+    ports:
+      - "6379:6379"
+    networks:
+      - eventsourcing-network
+
   balance-api:
     build:
       context: ./balance-api
@@ -310,6 +339,9 @@ services:
       KAFKA_GROUP_ACCOUNT: ledger-account-group
       KAFKA_GROUP_TRANSACTION: ledger-transaction-group
       KAFKA_GROUP_REHYDRATE: ledger-rehydrate-group
+
+      # Rate Limiter
+      RATELIMIT_SERVICE: ratelimit:8080
 
       # Application Configuration
       PORT: 8081

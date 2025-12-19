@@ -17,6 +17,9 @@ type Config struct {
 
 	// Application Configuration
 	App AppConfig
+
+	// Rate Limiter
+	RateLimit RateLimitConfig
 }
 
 // DatabaseConfig holds database connection settings
@@ -57,6 +60,10 @@ type AppConfig struct {
 	LogLevel    string
 }
 
+type RateLimitConfig struct {
+	Host string
+}
+
 // Load reads configuration from environment variables
 func Load() *Config {
 	config := &Config{
@@ -91,6 +98,9 @@ func Load() *Config {
 			Port:        getEnv("PORT", "8081"),
 			Environment: getEnv("ENVIRONMENT", "development"),
 			LogLevel:    getEnv("LOG_LEVEL", "info"),
+		},
+		RateLimit: RateLimitConfig{
+			Host: getEnv("RATE_LIMIT", "ratelimit:8080"),
 		},
 	}
 

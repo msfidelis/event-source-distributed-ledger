@@ -17,6 +17,7 @@ import (
 	database "ledger/pkg/db"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/uptrace/bun"
 )
 
@@ -99,9 +100,11 @@ func startHTTPServer() {
 	http.HandleFunc("/", handleHome)
 	http.HandleFunc("/health", handleHealth)
 	http.HandleFunc("/events", handleEvents)
+	http.Handle("/metrics", promhttp.Handler())
 
 	log.Printf("API rodando na porta %s", port)
 	log.Printf("Endpoints disponíveis em http://localhost:%s", port)
+	log.Printf("Prometheus metrics: http://localhost:%s/metrics", port)
 
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatal("Erro ao iniciar servidor HTTP:", err)
@@ -114,8 +117,9 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 		"status":  "running",
 		"time":    time.Now(),
 		"endpoints": map[string]string{
-			"GET /health": "Health check",
-			"GET /events": "Lista todos os eventos do event store",
+			"GET /health":  "Health check",
+			"GET /events":  "Lista todos os eventos do event store",
+			"GET /metrics": "Prometheus metrics",
 		},
 	}
 

@@ -154,7 +154,7 @@ func (c *Consumer) Consume(ctx context.Context, handler MessageHandler) error {
 // Close fecha o consumer
 func (c *Consumer) Close() error {
 	if c.consumerGroup != nil {
-		log.Printf("🔒 [Kafka] Fechando consumer para tópico: %s", c.topic)
+		log.Printf("[Kafka] Fechando consumer para tópico: %s", c.topic)
 		return c.consumerGroup.Close()
 	}
 	return nil

@@ -11,6 +11,7 @@ import (
 	"ledger/pkg/config"
 	"ledger/pkg/events"
 	"ledger/pkg/kafka"
+	"ledger/pkg/metrics"
 
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
@@ -57,19 +58,26 @@ func (l *Listener) StartConsuming(ctx context.Context) error {
 
 // Handle processa o evento de movimentação de conta
 func (l *Listener) Handle(key, value []byte) error {
+	startTime := time.Now()
+	eventType := events.EventTypeContaMovimentacao
+	listener := "transaction"
+
 	var envelope events.EventEnvelope
 	if err := json.Unmarshal(value, &envelope); err != nil {
+		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "unmarshal_error").Inc()
 		return fmt.Errorf("erro ao deserializar envelope: %w", err)
 	}
 
 	// Converte Data para ContaMovimentacao
 	dataBytes, err := json.Marshal(envelope.Data)
 	if err != nil {
+		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "marshal_error").Inc()
 		return fmt.Errorf("erro ao serializar data: %w", err)
 	}
 
 	var movimentacao events.ContaMovimentacao
 	if err := json.Unmarshal(dataBytes, &movimentacao); err != nil {
+		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "unmarshal_data_error").Inc()
 		return fmt.Errorf("erro ao deserializar ContaMovimentacao: %w", err)
 	}
 
@@ -85,6 +93,7 @@ func (l *Listener) Handle(key, value []byte) error {
 			events.EventTypeContaMovimentacao, dataBytes, envelope.Metadata)
 		if err != nil {
 			tx.Rollback()
+			metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "save_event_error").Inc()
 			return fmt.Errorf("erro ao salvar evento: %w", err)
 		}
 
@@ -96,6 +105,8 @@ func (l *Listener) Handle(key, value []byte) error {
 		if err != nil {
 			log.Printf("[Transaction] Erro ao processar transação: %v", err)
 			tx.Rollback()
+			metrics.TransactionsRollbackTotal.WithLabelValues("processing_error").Inc()
+			metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "process_transaction_error").Inc()
 			return fmt.Errorf("erro ao processar transação: %w", err)
 		}
 		// Commit
@@ -112,10 +123,18 @@ func (l *Listener) Handle(key, value []byte) error {
 		log.Printf("[Transaction] Erro ao publicar confirmação: %v", err)
 	}
 
+	// Métricas de sucesso
+	metrics.EventsProcessedTotal.WithLabelValues(eventType, listener).Inc()
+	metrics.EventsProcessingDuration.WithLabelValues(eventType, listener).Observe(time.Since(startTime).Seconds())
+	metrics.TransactionsProcessedTotal.WithLabelValues(string(movimentacao.Tipo)).Inc()
+	metrics.TransactionsPerAccount.WithLabelValues(movimentacao.ContaID.String()).Inc()
+
 	return nil
 }
 
 func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.UUID, aggregateType, eventType string, eventData []byte, metadata map[string]string) (int64, error) {
+	startTime := time.Now()
+
 	// Obtém a versão atual do agregado
 	var version int
 	err := tx.NewSelect().
@@ -124,12 +143,14 @@ func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.
 		Where("aggregate_id = ?", aggregateID).
 		Scan(ctx, &version)
 	if err != nil {
+		metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
 		return 0, fmt.Errorf("erro ao obter versão: %w", err)
 	}
 
 	// Converte metadata para JSONB
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
+		metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
 		return 0, fmt.Errorf("erro ao serializar metadata: %w", err)
 	}
 
@@ -149,7 +170,29 @@ func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.
 		Returning("id").
 		Exec(ctx)
 
+	if err != nil {
+		// Detecta conflitos de versão (optimistic locking)
+		if isVersionConflict(err) {
+			metrics.EventsVersionConflictsTotal.WithLabelValues(aggregateType).Inc()
+			metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "version_conflict").Inc()
+		} else {
+			metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
+		}
+		return 0, err
+	}
+
+	// Métricas de sucesso
+	metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "success").Inc()
+	metrics.EventsAppendDuration.WithLabelValues(aggregateType, eventType).Observe(time.Since(startTime).Seconds())
+
 	return event.ID, err
+}
+
+// isVersionConflict verifica se o erro é um conflito de versão
+func isVersionConflict(err error) bool {
+	// PostgreSQL unique violation error code é 23505
+	return err != nil && (err.Error() == "duplicate key value violates unique constraint" ||
+		err.Error() == "unique_violation")
 }
 
 func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov events.ContaMovimentacao) (float64, error) {
@@ -171,6 +214,12 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 		newBalance = currentBalance + mov.Valor
 	} else {
 		newBalance = currentBalance - mov.Valor
+	}
+
+	// Valida saldo negativo
+	if newBalance < 0 {
+		metrics.TransactionsRollbackTotal.WithLabelValues("negative_balance").Inc()
+		return 0, fmt.Errorf("saldo insuficiente: saldo atual=%.2f, valor=%.2f", currentBalance, mov.Valor)
 	}
 
 	// Atualiza saldo da conta

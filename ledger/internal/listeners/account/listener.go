@@ -11,6 +11,7 @@ import (
 	"ledger/pkg/config"
 	"ledger/pkg/events"
 	"ledger/pkg/kafka"
+	"ledger/pkg/metrics"
 
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
@@ -57,25 +58,33 @@ func (l *Listener) StartConsuming(ctx context.Context) error {
 
 // Handle processa o evento de conta criada
 func (l *Listener) Handle(key, value []byte) error {
+	startTime := time.Now()
+	eventType := events.EventTypeContaCriada
+	listener := "account"
+
 	var envelope events.EventEnvelope
 	if err := json.Unmarshal(value, &envelope); err != nil {
+		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "unmarshal_error").Inc()
 		return fmt.Errorf("erro ao deserializar envelope: %w", err)
 	}
 
 	// Converte Data para ContaCriada
 	dataBytes, err := json.Marshal(envelope.Data)
 	if err != nil {
+		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "marshal_error").Inc()
 		return fmt.Errorf("erro ao serializar data: %w", err)
 	}
 
 	var contaCriada events.ContaCriada
 	if err := json.Unmarshal(dataBytes, &contaCriada); err != nil {
+		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "unmarshal_data_error").Inc()
 		return fmt.Errorf("erro ao deserializar ContaCriada: %w", err)
 	}
 
 	// PRIMEIRO: Cria registro na tabela accounts (para satisfazer FK da tabela events)
 	if err := l.createAccount(contaCriada); err != nil {
 		log.Printf("[Account] Erro ao criar conta: %v", err)
+		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "create_account_error").Inc()
 		return fmt.Errorf("erro ao criar conta: %w", err)
 	}
 
@@ -88,6 +97,7 @@ func (l *Listener) Handle(key, value []byte) error {
 		envelope.Metadata,
 	)
 	if err != nil {
+		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "save_event_error").Inc()
 		return fmt.Errorf("erro ao salvar evento: %w", err)
 	}
 
@@ -100,10 +110,16 @@ func (l *Listener) Handle(key, value []byte) error {
 		// Não retorna erro para não bloquear o consumer
 	}
 
+	// Métricas de sucesso
+	metrics.EventsProcessedTotal.WithLabelValues(eventType, listener).Inc()
+	metrics.EventsProcessingDuration.WithLabelValues(eventType, listener).Observe(time.Since(startTime).Seconds())
+	metrics.AccountsCreatedTotal.Inc()
+
 	return nil
 }
 
 func (l *Listener) saveEvent(aggregateID uuid.UUID, aggregateType, eventType string, eventData []byte, metadata map[string]string) (int64, error) {
+	startTime := time.Now()
 	ctx := context.Background()
 
 	// Obtém a versão atual do agregado
@@ -114,12 +130,14 @@ func (l *Listener) saveEvent(aggregateID uuid.UUID, aggregateType, eventType str
 		Where("aggregate_id = ?", aggregateID).
 		Scan(ctx, &version)
 	if err != nil {
+		metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
 		return 0, fmt.Errorf("erro ao obter versão: %w", err)
 	}
 
 	// Converte metadata para JSONB
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
+		metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
 		return 0, fmt.Errorf("erro ao serializar metadata: %w", err)
 	}
 
@@ -139,7 +157,29 @@ func (l *Listener) saveEvent(aggregateID uuid.UUID, aggregateType, eventType str
 		Returning("id").
 		Exec(ctx)
 
+	if err != nil {
+		// Detecta conflitos de versão (optimistic locking)
+		if isVersionConflict(err) {
+			metrics.EventsVersionConflictsTotal.WithLabelValues(aggregateType).Inc()
+			metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "version_conflict").Inc()
+		} else {
+			metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
+		}
+		return 0, err
+	}
+
+	// Métricas de sucesso
+	metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "success").Inc()
+	metrics.EventsAppendDuration.WithLabelValues(aggregateType, eventType).Observe(time.Since(startTime).Seconds())
+
 	return event.ID, err
+}
+
+// isVersionConflict verifica se o erro é um conflito de versão
+func isVersionConflict(err error) bool {
+	// PostgreSQL unique violation error code é 23505
+	return err != nil && (err.Error() == "duplicate key value violates unique constraint" ||
+		err.Error() == "unique_violation")
 }
 
 func (l *Listener) createAccount(conta events.ContaCriada) error {
