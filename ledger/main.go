@@ -15,6 +15,7 @@ import (
 	"ledger/internal/listeners/transaction"
 	"ledger/pkg/config"
 	database "ledger/pkg/db"
+	"ledger/pkg/migrations"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -29,6 +30,12 @@ func main() {
 
 	// Carrega configurações
 	cfg = config.Load()
+
+	// Executa migrations antes de conectar ao banco
+	if err := migrations.RunMigrations(cfg.GetDatabaseURL(), cfg.App.MigrationsPath); err != nil {
+		log.Printf("[Migrations] AVISO: Erro ao executar migrations: %v", err)
+		log.Println("[Migrations] Continuando inicialização...")
+	}
 
 	// Conecta ao PostgreSQL usando Bun
 	bunDB = database.GetDB()
@@ -76,7 +83,7 @@ func main() {
 		log.Fatal("Erro ao criar rehydrate listener:", err)
 	}
 
-	// Inicia cada listener em sua própria goroutine
+	// Inicia os listeners em goroutines separadas
 	go func() {
 		if err := accountListener.StartConsuming(ctx); err != nil {
 			log.Printf("[Account] Erro no consumer: %v", err)
@@ -101,7 +108,6 @@ func main() {
 		}
 	}()
 
-	// Aguarda cancelamento
 	<-ctx.Done()
 	log.Println("Ledger finalizado")
 }

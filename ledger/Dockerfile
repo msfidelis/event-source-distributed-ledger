@@ -11,6 +11,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 FROM cgr.dev/chainguard/wolfi-base:latest
 
 COPY --from=builder /go/src/app/main ./
+COPY --from=builder /go/src/app/database/migrations ./database/migrations
 
 EXPOSE 8080
 

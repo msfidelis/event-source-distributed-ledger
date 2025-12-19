@@ -269,11 +269,13 @@ SELECT balance, version FROM balance_ks.balances WHERE id = e424ed00-134e-4e92-9
 
 ---
 
-## 8. Configuração de Variáveis de Ambiente
+
+
+## 9. Configuração de Variáveis de Ambiente
 
 Todos os serviços suportam configuração via variáveis de ambiente para facilitar deploy em diferentes ambientes.
 
-### 8.1 Ledger Service
+### 9.1 Ledger Service
 
 Serviço principal de event sourcing que processa comandos e mantém o Event Store.
 
@@ -306,10 +308,11 @@ Serviço principal de event sourcing que processa comandos e mantém o Event Sto
 | `PORT` | Porta do servidor HTTP | `8081` | Não |
 | `ENVIRONMENT` | Ambiente de execução (development, production) | `development` | Não |
 | `LOG_LEVEL` | Nível de log (debug, info, warn, error) | `info` | Não |
+| `MIGRATIONS_PATH` | Caminho para os arquivos de migration | `database/migrations` | Não |
 | **Rate Limiting** |
-| `RATELIMIT_SERVICE` | Host do Envoy Rate Limiter (gRPC) | `ratelimit:8080` | Não |
+| `RATE_LIMIT` | Host do Envoy Rate Limiter (gRPC) | `ratelimit:8080` | Não |
 
-### 8.2 Balance Ingestion Service
+### 9.2 Balance Ingestion Service
 
 Serviço que consome eventos de saldo e atualiza o read model no ScyllaDB.
 

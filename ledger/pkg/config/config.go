@@ -56,9 +56,10 @@ type KafkaConfig struct {
 
 // AppConfig holds application-level settings
 type AppConfig struct {
-	Port        string
-	Environment string
-	LogLevel    string
+	Port           string
+	Environment    string
+	LogLevel       string
+	MigrationsPath string
 }
 
 type RateLimitConfig struct {
@@ -97,9 +98,10 @@ func Load() *Config {
 			GroupRehydrateListener:   getEnv("KAFKA_GROUP_REHYDRATE", "ledger-rehydrate-group"),
 		},
 		App: AppConfig{
-			Port:        getEnv("PORT", "8081"),
-			Environment: getEnv("ENVIRONMENT", "development"),
-			LogLevel:    getEnv("LOG_LEVEL", "info"),
+			Port:           getEnv("PORT", "8081"),
+			Environment:    getEnv("ENVIRONMENT", "development"),
+			LogLevel:       getEnv("LOG_LEVEL", "info"),
+			MigrationsPath: getEnv("MIGRATIONS_PATH", "database/migrations"),
 		},
 		RateLimit: RateLimitConfig{
 			Host: getEnv("RATE_LIMIT", "ratelimit:8081"),
