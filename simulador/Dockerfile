@@ -1,18 +1,17 @@
-FROM golang:1.25-alpine
+FROM golang:1.25 AS builder
 
-WORKDIR /app
+WORKDIR $GOPATH/src/app
 
-# Instalar Air para hot reload
-RUN go install github.com/air-verse/air@latest
+COPY . ./
 
-# Copiar go.mod e go.sum
-COPY go.mod go.sum* ./
+RUN go get -u
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 
-# Download de dependências
-RUN go mod download
 
-# Copiar o código fonte
-COPY . .
+FROM cgr.dev/chainguard/wolfi-base:latest
 
-# Comando padrão
-CMD ["air", "-c", ".air.toml"]
+COPY --from=builder /go/src/app/main ./
+
+EXPOSE 8080
+
+ENTRYPOINT ["./main"]

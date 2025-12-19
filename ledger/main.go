@@ -11,30 +11,27 @@ import (
 	"time"
 
 	"ledger/internal/listeners/account"
+	"ledger/internal/listeners/rehydratate"
 	"ledger/internal/listeners/transaction"
+	"ledger/pkg/config"
 	database "ledger/pkg/db"
-	"ledger/pkg/kafka"
 
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
 )
 
 var bunDB *bun.DB
+var cfg *config.Config
 
 func main() {
-	log.Println("Iniciando Ledger - Event Store Consumer...")
+	log.Println("Iniciando Ledger - Event Store")
+
+	// Carrega configurações
+	cfg = config.Load()
 
 	// Conecta ao PostgreSQL usando Bun
 	bunDB = database.GetDB()
 	log.Println("Conectado ao PostgreSQL via Bun")
-
-	// Configuração do Kafka
-	brokers := os.Getenv("KAFKA_BROKERS")
-	if brokers == "" {
-		brokers = "localhost:9092"
-	}
-	brokersList := kafka.ParseBrokers(brokers)
-	log.Printf("Conectando ao Kafka: %v", brokersList)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -49,18 +46,27 @@ func main() {
 		cancel()
 	}()
 
-	// Inicia API HTTP em goroutine separada
+	// API HTTP em goroutine separada
 	go startHTTPServer()
 
-	// Instancia listeners com seus consumidores integrados
-	accountListener, err := account.NewListener(bunDB, brokersList)
+	// Listeners
+
+	// Listeners de Novas Contas
+	accountListener, err := account.NewListener(bunDB, cfg)
 	if err != nil {
 		log.Fatal("Erro ao criar account listener:", err)
 	}
 
-	transactionListener, err := transaction.NewListener(bunDB, brokersList)
+	// Listeners de Transações
+	transactionListener, err := transaction.NewListener(bunDB, cfg)
 	if err != nil {
 		log.Fatal("Erro ao criar transaction listener:", err)
+	}
+
+	// Listener de Rehydratation
+	rehydrateListener, err := rehydratate.NewListener(bunDB, cfg)
+	if err != nil {
+		log.Fatal("Erro ao criar rehydrate listener:", err)
 	}
 
 	// Inicia cada listener em sua própria goroutine
@@ -76,16 +82,19 @@ func main() {
 		}
 	}()
 
+	go func() {
+		if err := rehydrateListener.StartConsuming(ctx); err != nil {
+			log.Printf("[Rehydrate] Erro no consumer: %v", err)
+		}
+	}()
+
 	// Aguarda cancelamento
 	<-ctx.Done()
 	log.Println("Ledger finalizado")
 }
 
 func startHTTPServer() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8081"
-	}
+	port := cfg.App.Port
 
 	http.HandleFunc("/", handleHome)
 	http.HandleFunc("/health", handleHealth)

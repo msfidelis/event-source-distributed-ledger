@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"statement-api/pkg/config"
 	"statement-api/pkg/mongodb"
 	"statement-api/routes"
 
@@ -13,12 +19,15 @@ import (
 func main() {
 	log.Println("Iniciando Statement API Service...")
 
-	mongodbHosts := getEnv("MONGODB_HOSTS", "localhost:27017")
-	port := getEnv("PORT", "8085")
+	// Carrega configurações
+	cfg := config.Load()
 
-	mongoURI := "mongodb://" + mongodbHosts
+	// Configura modo do Gin baseado no ambiente
+	if cfg.App.Environment == "production" {
+		gin.SetMode(gin.ReleaseMode)
+	}
 
-	mongoClient, err := mongodb.NewClient(mongoURI, "extrato")
+	mongoClient, err := mongodb.NewClient(cfg)
 	if err != nil {
 		log.Fatalf("Erro ao conectar ao MongoDB: %v", err)
 	}
@@ -29,19 +38,41 @@ func main() {
 	statementHandler := routes.NewStatementHandler(mongoClient)
 
 	router.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
+		c.JSON(200, gin.H{
+			"status":      "ok",
+			"environment": cfg.App.Environment,
+		})
 	})
 	router.GET("/statements/:conta_id", statementHandler.GetStatements)
 
-	log.Printf("Statement API rodando na porta %s", port)
-	if err := router.Run(":" + port); err != nil {
-		log.Fatalf("Erro ao iniciar servidor: %v", err)
+	// Configura servidor HTTP com timeouts
+	srv := &http.Server{
+		Addr:         ":" + cfg.Server.Port,
+		Handler:      router,
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
 	}
-}
 
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+	// Inicia servidor em goroutine
+	go func() {
+		log.Printf("Statement API rodando na porta %s (ambiente: %s)", cfg.Server.Port, cfg.App.Environment)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Erro ao iniciar servidor: %v", err)
+		}
+	}()
+
+	// Aguarda sinal de interrupção para graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Desligando servidor...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal("Erro ao desligar servidor:", err)
 	}
-	return defaultValue
+
+	log.Println("Servidor desligado com sucesso")
 }

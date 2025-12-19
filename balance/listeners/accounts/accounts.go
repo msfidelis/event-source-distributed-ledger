@@ -2,6 +2,7 @@ package accounts
 
 import (
 	"balance/internal/models"
+	"balance/pkg/config"
 	"balance/pkg/scylla"
 	"encoding/json"
 	"log"
@@ -9,11 +10,13 @@ import (
 
 type Listener struct {
 	scyllaClient *scylla.Client
+	config       *config.Config
 }
 
-func NewListener(scyllaClient *scylla.Client) *Listener {
+func NewListener(scyllaClient *scylla.Client, cfg *config.Config) *Listener {
 	return &Listener{
 		scyllaClient: scyllaClient,
+		config:       cfg,
 	}
 }
 
@@ -37,7 +40,5 @@ func (l *Listener) HandleMessage(key, value []byte) error {
 	}
 
 	log.Printf("[AccountsListener] Conta registrada com sucesso para conta %s", newAccount.ContaID)
-	return nil
-
 	return nil
 }

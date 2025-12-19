@@ -53,8 +53,26 @@ services:
       dockerfile: Dockerfile.dev
     container_name: eventsourcing-balance-api
     environment:
+      # ScyllaDB Configuration
       SCYLLA_HOSTS: balance-scylla:9042
+      SCYLLA_KEYSPACE: balance_ks
+      SCYLLA_USERNAME: ""
+      SCYLLA_PASSWORD: ""
+      SCYLLA_PORT: 9042
+      SCYLLA_CONSISTENCY: QUORUM
+      SCYLLA_TIMEOUT: 10s
+      SCYLLA_CONNECT_TIMEOUT: 10s
+      SCYLLA_PROTO_VERSION: 4
+      SCYLLA_RETRY_ATTEMPTS: 3
+
+      # Server Configuration
       PORT: 8083
+      SERVER_READ_TIMEOUT: 30s
+      SERVER_WRITE_TIMEOUT: 30s
+
+      # Application Configuration
+      ENVIRONMENT: production
+      LOG_LEVEL: info
     ports:
       - "8083:8083"
     volumes:
@@ -74,9 +92,28 @@ services:
       dockerfile: Dockerfile.dev
     container_name: eventsourcing-balance-ingestion
     environment:
-      KAFKA_BROKERS: kafka:29092
+      # ScyllaDB Configuration
       SCYLLA_HOSTS: balance-scylla:9042
+      SCYLLA_KEYSPACE: balance
+      SCYLLA_USERNAME: ""
+      SCYLLA_PASSWORD: ""
+      SCYLLA_PORT: 9042
+
+      # Kafka Brokers
+      KAFKA_BROKERS: kafka:29092
+
+      # Kafka Consumer Topics
+      KAFKA_TOPIC_SALDO_ATUALIZADO: ledger_saldo_atualizado
+      KAFKA_TOPIC_NOVA_CONTA_REGISTRADA: ledger_nova_conta_registrada
+
+      # Kafka Consumer Groups
+      KAFKA_GROUP_BALANCE: balance-ingestion-group
+      KAFKA_GROUP_ACCOUNTS: balance-accounts-group
+
+      # Application Configuration
       PORT: 8082
+      ENVIRONMENT: production
+      LOG_LEVEL: info
     ports:
       - "8082:8082"
     volumes:
@@ -128,10 +165,30 @@ services:
       dockerfile: Dockerfile.dev
     container_name: eventsourcing-statements-ingestion
     environment:
+      # MongoDB Configuration
       MONGODB_HOSTS: statements-mongo:27017
+      MONGODB_DATABASE: extrato
+      MONGODB_USERNAME: ""
+      MONGODB_PASSWORD: ""
+      MONGODB_URI: ""
+      MONGODB_CONNECT_TIMEOUT: 10s
+      MONGODB_QUERY_TIMEOUT: 5s
+      MONGODB_MAX_POOL_SIZE: 100
+      MONGODB_MIN_POOL_SIZE: 10
+
+      # Kafka Brokers
       KAFKA_BROKERS: kafka:29092
-      KAFKA_STATEMENTS_TOPIC: ledger_nova_transacao_confirmada
+
+      # Kafka Consumer Topics
+      KAFKA_TOPIC_TRANSACTION_CONFIRMED: ledger_nova_transacao_confirmada
+
+      # Kafka Consumer Groups
+      KAFKA_GROUP_STATEMENT: statement-ingestion-group
+
+      # Application Configuration
       PORT: 8084
+      ENVIRONMENT: production
+      LOG_LEVEL: info
     ports:
       - "8084:8084"
     volumes:
@@ -152,8 +209,25 @@ services:
       dockerfile: Dockerfile.dev
     container_name: eventsourcing-statements-api
     environment:
+      # MongoDB Configuration
       MONGODB_HOSTS: statements-mongo:27017
+      MONGODB_DATABASE: extrato
+      MONGODB_USERNAME: ""
+      MONGODB_PASSWORD: ""
+      MONGODB_URI: ""
+      MONGODB_CONNECT_TIMEOUT: 10s
+      MONGODB_QUERY_TIMEOUT: 10s
+      MONGODB_MAX_POOL_SIZE: 100
+      MONGODB_MIN_POOL_SIZE: 10
+
+      # HTTP Server Configuration
       PORT: 8085
+      SERVER_READ_TIMEOUT: 10s
+      SERVER_WRITE_TIMEOUT: 10s
+
+      # Application Configuration
+      ENVIRONMENT: production
+      LOG_LEVEL: info
     ports:
       - "8085:8085"
     volumes:
@@ -171,7 +245,30 @@ services:
       dockerfile: Dockerfile.dev
     container_name: eventsourcing-simulador
     environment:
+      # Kafka Configuration
       KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC_CONTA_CRIADA: conta_criada
+      KAFKA_TOPIC_CONTA_MOVIMENTACAO: conta_movimentacao
+      KAFKA_REQUIRED_ACKS: 1
+      KAFKA_ASYNC: true
+      KAFKA_BATCH_SIZE: 100
+      KAFKA_BATCH_TIMEOUT: 10ms
+      KAFKA_COMPRESSION: snappy
+
+      # Simulation Configuration
+      SIM_NUM_CONTAS: 15
+      SIM_CONTINUOUS_MODE: true
+      SIM_NUM_MOVIMENTACOES: 100
+      SIM_NUM_WORKERS: 1
+      SIM_EVENTS_PER_WORKER: 1
+      SIM_SLEEP_BETWEEN_EVENTS: 1s
+      SIM_CREDITO_PROBABILITY: 0.7
+      SIM_TRANSFER_PROBABILITY: 0.2
+      SIM_WAIT_AFTER_CREATE: 10s
+
+      # Application Configuration
+      ENVIRONMENT: production
+      LOG_LEVEL: info
     volumes:
       - ./simulador:/app
     networks:
@@ -187,15 +284,37 @@ services:
       dockerfile: Dockerfile.dev
     container_name: eventsourcing-ledger
     environment:
+      # Database Configuration
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/eventsourcing?sslmode=disable
       DATABASE_USER: postgres
       DATABASE_PASSWORD: postgres
       DATABASE_HOST: postgres
       DATABASE_PORT: "5432"
       DATABASE_DB: eventsourcing
+      DATABASE_SSL_MODE: disable
 
+      # Kafka Brokers
       KAFKA_BROKERS: kafka:29092
+
+      # Kafka Consumer Topics
+      KAFKA_TOPIC_CONTA_CRIADA: conta_criada
+      KAFKA_TOPIC_CONTA_MOVIMENTACAO: conta_movimentacao
+      KAFKA_TOPIC_REHYDRATATE: ledger_rehydratate_transactions
+
+      # Kafka Producer Topics
+      KAFKA_TOPIC_NOVA_CONTA_REGISTRADA: ledger_nova_conta_registrada
+      KAFKA_TOPIC_NOVA_TRANSACAO_CONFIRMADA: ledger_nova_transacao_confirmada
+      KAFKA_TOPIC_SALDO_ATUALIZADO: ledger_saldo_atualizado
+
+      # Kafka Consumer Groups
+      KAFKA_GROUP_ACCOUNT: ledger-account-group
+      KAFKA_GROUP_TRANSACTION: ledger-transaction-group
+      KAFKA_GROUP_REHYDRATE: ledger-rehydrate-group
+
+      # Application Configuration
       PORT: 8081
+      ENVIRONMENT: production
+      LOG_LEVEL: info
     ports:
       - "8081:8081"
     volumes:

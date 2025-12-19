@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"statement/listeners/transaction"
+	"statement/pkg/config"
 	"statement/pkg/kafka"
 	"statement/pkg/mongodb"
 )
@@ -15,13 +16,10 @@ import (
 func main() {
 	log.Println("Iniciando Statement Ingestion Service...")
 
-	kafkaBrokers := getEnv("KAFKA_BROKERS", "localhost:9092")
-	mongodbHosts := getEnv("MONGODB_HOSTS", "localhost:27017")
-	kafkaTopic := getEnv("KAFKA_STATEMENTS_TOPIC", "ledger_nova_transacao_confirmada")
+	// Carrega configurações
+	cfg := config.Load()
 
-	mongoURI := "mongodb://" + mongodbHosts
-
-	mongoClient, err := mongodb.NewClient(mongoURI, "extrato")
+	mongoClient, err := mongodb.NewClient(cfg)
 	if err != nil {
 		log.Fatalf("Erro ao conectar ao MongoDB: %v", err)
 	}
@@ -31,12 +29,12 @@ func main() {
 		log.Fatalf("Erro ao inicializar índices do MongoDB: %v", err)
 	}
 
-	transactionListener := transaction.NewListener(mongoClient)
+	transactionListener := transaction.NewListener(mongoClient, cfg)
 
 	consumer := kafka.NewConsumer(
-		kafka.ParseBrokers(kafkaBrokers),
-		kafkaTopic,
-		"statement-ingestion-group",
+		cfg.Kafka.Brokers,
+		cfg.Kafka.TopicTransactionConfirmed,
+		cfg.Kafka.GroupStatementIngestion,
 	)
 	defer consumer.Close()
 
@@ -51,7 +49,7 @@ func main() {
 		cancel()
 	}()
 
-	log.Printf("Iniciando consumo de mensagens do tópico %s...", kafkaTopic)
+	log.Printf("Iniciando consumo de mensagens do tópico %s...", cfg.Kafka.TopicTransactionConfirmed)
 	if err := consumer.Consume(ctx, transactionListener.HandleMessage); err != nil {
 		if err != context.Canceled {
 			log.Fatalf("Erro ao consumir mensagens: %v", err)
@@ -59,11 +57,4 @@ func main() {
 	}
 
 	log.Println("Statement Ingestion Service encerrado")
-}
-
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }

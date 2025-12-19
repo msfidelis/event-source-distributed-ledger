@@ -3,6 +3,7 @@ package mongodb
 import (
 	"context"
 	"log"
+	"statement-api/pkg/config"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -13,6 +14,7 @@ import (
 type Client struct {
 	client   *mongo.Client
 	database *mongo.Database
+	config   *config.Config
 }
 
 type Transaction struct {
@@ -35,11 +37,17 @@ type StatementResult struct {
 	TotalPages   int           `json:"total_pages"`
 }
 
-func NewClient(uri, database string) (*Client, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func NewClient(cfg *config.Config) (*Client, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.MongoDB.ConnectTimeout)
 	defer cancel()
 
+	uri := cfg.GetMongoURI()
 	clientOptions := options.Client().ApplyURI(uri)
+
+	// Set pool size options
+	clientOptions.SetMaxPoolSize(cfg.MongoDB.MaxPoolSize)
+	clientOptions.SetMinPoolSize(cfg.MongoDB.MinPoolSize)
+
 	client, err := mongo.Connect(ctx, clientOptions)
 	if err != nil {
 		return nil, err
@@ -49,13 +57,14 @@ func NewClient(uri, database string) (*Client, error) {
 		return nil, err
 	}
 
-	log.Printf("[MongoDB] Conexão estabelecida com sucesso: %s", database)
+	log.Printf("[MongoDB] Conexão estabelecida com sucesso: %s", cfg.MongoDB.Database)
 
-	db := client.Database(database)
+	db := client.Database(cfg.MongoDB.Database)
 
 	return &Client{
 		client:   client,
 		database: db,
+		config:   cfg,
 	}, nil
 }
 
@@ -70,7 +79,7 @@ func (c *Client) GetStatements(contaID string, startDate, endDate time.Time, pag
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), c.config.MongoDB.QueryTimeout)
 	defer cancel()
 
 	// Conta total de documentos
@@ -122,7 +131,7 @@ func (c *Client) GetStatements(contaID string, startDate, endDate time.Time, pag
 func (c *Client) Close() error {
 	if c.client != nil {
 		log.Printf("[MongoDB] Fechando conexão")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), c.config.MongoDB.QueryTimeout)
 		defer cancel()
 		return c.client.Disconnect(ctx)
 	}

@@ -3,7 +3,7 @@ package mongodb
 import (
 	"context"
 	"log"
-	"time"
+	"statement/pkg/config"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -13,13 +13,20 @@ import (
 type Client struct {
 	client   *mongo.Client
 	database *mongo.Database
+	config   *config.Config
 }
 
-func NewClient(uri, database string) (*Client, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func NewClient(cfg *config.Config) (*Client, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.MongoDB.ConnectTimeout)
 	defer cancel()
 
+	uri := cfg.GetMongoURI()
 	clientOptions := options.Client().ApplyURI(uri)
+
+	// Set pool size options
+	clientOptions.SetMaxPoolSize(cfg.MongoDB.MaxPoolSize)
+	clientOptions.SetMinPoolSize(cfg.MongoDB.MinPoolSize)
+
 	client, err := mongo.Connect(ctx, clientOptions)
 	if err != nil {
 		return nil, err
@@ -29,13 +36,14 @@ func NewClient(uri, database string) (*Client, error) {
 		return nil, err
 	}
 
-	log.Printf("[MongoDB] Conexão estabelecida com sucesso: %s", database)
+	log.Printf("[MongoDB] Conexão estabelecida com sucesso: %s", cfg.MongoDB.Database)
 
-	db := client.Database(database)
+	db := client.Database(cfg.MongoDB.Database)
 
 	return &Client{
 		client:   client,
 		database: db,
+		config:   cfg,
 	}, nil
 }
 
@@ -50,7 +58,7 @@ func (c *Client) InitIndexes() error {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), c.config.MongoDB.QueryTimeout)
 	defer cancel()
 
 	name, err := collection.Indexes().CreateOne(ctx, indexModel)
@@ -67,12 +75,12 @@ func (c *Client) InitIndexes() error {
 func (c *Client) InsertTransaction(transaction interface{}) error {
 	collection := c.database.Collection("transactions")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), c.config.MongoDB.QueryTimeout)
 	defer cancel()
 
 	_, err := collection.InsertOne(ctx, transaction)
 	if err != nil {
-		// Se for erro de duplicata (código 11000), ignora silenciosamente
+		// Se for erro de duplicata (c\u00f3digo 11000), ignora silenciosamente
 		if mongo.IsDuplicateKeyError(err) {
 			return nil
 		}
@@ -84,8 +92,8 @@ func (c *Client) InsertTransaction(transaction interface{}) error {
 
 func (c *Client) Close() error {
 	if c.client != nil {
-		log.Printf("[MongoDB] Fechando conexão")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		log.Printf("[MongoDB] Fechando conex\u00e3o")
+		ctx, cancel := context.WithTimeout(context.Background(), c.config.MongoDB.QueryTimeout)
 		defer cancel()
 		return c.client.Disconnect(ctx)
 	}

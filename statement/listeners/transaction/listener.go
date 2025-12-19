@@ -5,16 +5,19 @@ import (
 	"log"
 
 	"statement/internal/models"
+	"statement/pkg/config"
 	"statement/pkg/mongodb"
 )
 
 type Listener struct {
 	mongoClient *mongodb.Client
+	config      *config.Config
 }
 
-func NewListener(mongoClient *mongodb.Client) *Listener {
+func NewListener(mongoClient *mongodb.Client, cfg *config.Config) *Listener {
 	return &Listener{
 		mongoClient: mongoClient,
+		config:      cfg,
 	}
 }
 

@@ -269,3 +269,183 @@ SELECT balance, version FROM balance_ks.balances WHERE id = e424ed00-134e-4e92-9
 
 ---
 
+## 8. Configuração de Variáveis de Ambiente
+
+Todos os serviços suportam configuração via variáveis de ambiente para facilitar deploy em diferentes ambientes.
+
+### 8.1 Ledger Service
+
+Serviço principal de event sourcing que processa comandos e mantém o Event Store.
+
+| Variável | Descrição | Padrão | Obrigatório |
+|----------|-----------|--------|-------------|
+| **Database** |
+| `DATABASE_URL` | URL completa de conexão PostgreSQL | `postgres://postgres:postgres@localhost:5432/eventsourcing?sslmode=disable` | Não |
+| `DATABASE_USER` | Usuário do PostgreSQL | `postgres` | Não |
+| `DATABASE_PASSWORD` | Senha do PostgreSQL | `postgres` | Não |
+| `DATABASE_HOST` | Host do PostgreSQL | `localhost` | Não |
+| `DATABASE_PORT` | Porta do PostgreSQL | `5432` | Não |
+| `DATABASE_DB` | Nome do database | `eventsourcing` | Não |
+| `DATABASE_SSL_MODE` | Modo SSL (disable, require, verify-ca, verify-full) | `disable` | Não |
+| **Kafka Brokers** |
+| `KAFKA_BROKERS` | Lista de brokers separados por vírgula | `localhost:9092` | Não |
+| **Kafka Consumer Topics** |
+| `KAFKA_TOPIC_CONTA_CRIADA` | Tópico de entrada para criação de contas | `conta_criada` | Não |
+| `KAFKA_TOPIC_CONTA_MOVIMENTACAO` | Tópico de entrada para movimentações | `conta_movimentacao` | Não |
+| `KAFKA_TOPIC_REHYDRATATE` | Tópico para reprocessamento de eventos | `ledger_rehydratate_transactions` | Não |
+| **Kafka Producer Topics** |
+| `KAFKA_TOPIC_NOVA_CONTA_REGISTRADA` | Tópico de saída para contas criadas | `ledger_nova_conta_registrada` | Não |
+| `KAFKA_TOPIC_NOVA_TRANSACAO_CONFIRMADA` | Tópico de saída para transações confirmadas | `ledger_nova_transacao_confirmada` | Não |
+| `KAFKA_TOPIC_SALDO_ATUALIZADO` | Tópico de saída para atualizações de saldo | `ledger_saldo_atualizado` | Não |
+| **Kafka Consumer Groups** |
+| `KAFKA_GROUP_ACCOUNT` | Consumer group para criação de contas | `ledger-account-group` | Não |
+| `KAFKA_GROUP_TRANSACTION` | Consumer group para movimentações | `ledger-transaction-group` | Não |
+| `KAFKA_GROUP_REHYDRATE` | Consumer group para reprocessamento | `ledger-rehydrate-group` | Não |
+| **Application** |
+| `PORT` | Porta do servidor HTTP | `8081` | Não |
+| `ENVIRONMENT` | Ambiente de execução (development, production) | `development` | Não |
+| `LOG_LEVEL` | Nível de log (debug, info, warn, error) | `info` | Não |
+
+### 8.2 Balance Ingestion Service
+
+Serviço que consome eventos de saldo e atualiza o read model no ScyllaDB.
+
+| Variável | Descrição | Padrão | Obrigatório |
+|----------|-----------|--------|-------------|
+| **ScyllaDB** |
+| `SCYLLA_HOSTS` | Lista de hosts ScyllaDB separados por vírgula | `localhost:9042` | Não |
+| `SCYLLA_KEYSPACE` | Keyspace do ScyllaDB | `balance` | Não |
+| `SCYLLA_USERNAME` | Usuário do ScyllaDB | `` | Não |
+| `SCYLLA_PASSWORD` | Senha do ScyllaDB | `` | Não |
+| `SCYLLA_PORT` | Porta do ScyllaDB | `9042` | Não |
+| **Kafka** |
+| `KAFKA_BROKERS` | Lista de brokers separados por vírgula | `localhost:9092` | Não |
+| `KAFKA_TOPIC_SALDO_ATUALIZADO` | Tópico de entrada para saldos | `ledger_saldo_atualizado` | Não |
+| `KAFKA_TOPIC_NOVA_CONTA_REGISTRADA` | Tópico de entrada para contas | `ledger_nova_conta_registrada` | Não |
+| `KAFKA_GROUP_BALANCE` | Consumer group para saldos | `balance-ingestion-group` | Não |
+| `KAFKA_GROUP_ACCOUNTS` | Consumer group para contas | `balance-accounts-group` | Não |
+| **Application** |
+| `PORT` | Porta do servidor HTTP | `8082` | Não |
+| `ENVIRONMENT` | Ambiente de execução | `development` | Não |
+| `LOG_LEVEL` | Nível de log | `info` | Não |
+
+### 8.3 Balance API Service
+
+API REST para consulta de saldos no ScyllaDB.
+
+| Variável | Descrição | Padrão | Obrigatório |
+|----------|-----------|--------|-------------|
+| **ScyllaDB** |
+| `SCYLLA_HOSTS` | Lista de hosts ScyllaDB separados por vírgula | `localhost:9042` | Não |
+| `SCYLLA_KEYSPACE` | Keyspace do ScyllaDB | `balance_ks` | Não |
+| `SCYLLA_USERNAME` | Usuário do ScyllaDB | `` | Não |
+| `SCYLLA_PASSWORD` | Senha do ScyllaDB | `` | Não |
+| `SCYLLA_PORT` | Porta do ScyllaDB | `9042` | Não |
+| `SCYLLA_CONSISTENCY` | Nível de consistência (QUORUM, ONE, ALL, LOCAL_QUORUM) | `QUORUM` | Não |
+| `SCYLLA_TIMEOUT` | Timeout para queries | `10s` | Não |
+| `SCYLLA_CONNECT_TIMEOUT` | Timeout para conexão | `10s` | Não |
+| `SCYLLA_PROTO_VERSION` | Versão do protocolo CQL | `4` | Não |
+| `SCYLLA_RETRY_ATTEMPTS` | Tentativas de retry | `3` | Não |
+| **Server** |
+| `PORT` | Porta do servidor HTTP | `8083` | Não |
+| `SERVER_READ_TIMEOUT` | Timeout de leitura HTTP | `30s` | Não |
+| `SERVER_WRITE_TIMEOUT` | Timeout de escrita HTTP | `30s` | Não |
+| **Application** |
+| `ENVIRONMENT` | Ambiente de execução | `development` | Não |
+| `LOG_LEVEL` | Nível de log | `info` | Não |
+
+### 8.4 Statement Ingestion Service
+
+Serviço que consome eventos de transações e atualiza o read model no MongoDB.
+
+| Variável | Descrição | Padrão | Obrigatório |
+|----------|-----------|--------|-------------|
+| **MongoDB** |
+| `MONGODB_HOSTS` | Lista de hosts MongoDB separados por vírgula | `localhost:27017` | Não |
+| `MONGODB_DATABASE` | Nome do database | `extrato` | Não |
+| `MONGODB_USERNAME` | Usuário do MongoDB | `` | Não |
+| `MONGODB_PASSWORD` | Senha do MongoDB | `` | Não |
+| `MONGODB_URI` | URI completa (sobrescreve configurações acima) | `` | Não |
+| `MONGODB_CONNECT_TIMEOUT` | Timeout para conexão | `10s` | Não |
+| `MONGODB_QUERY_TIMEOUT` | Timeout para queries | `5s` | Não |
+| `MONGODB_MAX_POOL_SIZE` | Tamanho máximo do pool de conexões | `100` | Não |
+| `MONGODB_MIN_POOL_SIZE` | Tamanho mínimo do pool de conexões | `10` | Não |
+| **Kafka** |
+| `KAFKA_BROKERS` | Lista de brokers separados por vírgula | `localhost:9092` | Não |
+| `KAFKA_TOPIC_TRANSACTION_CONFIRMED` | Tópico de entrada para transações | `ledger_nova_transacao_confirmada` | Não |
+| `KAFKA_GROUP_STATEMENT` | Consumer group | `statement-ingestion-group` | Não |
+| **Application** |
+| `PORT` | Porta do servidor HTTP | `8084` | Não |
+| `ENVIRONMENT` | Ambiente de execução | `development` | Não |
+| `LOG_LEVEL` | Nível de log | `info` | Não |
+
+### 8.5 Statement API Service
+
+API REST para consulta de extratos no MongoDB.
+
+| Variável | Descrição | Padrão | Obrigatório |
+|----------|-----------|--------|-------------|
+| **MongoDB** |
+| `MONGODB_HOSTS` | Lista de hosts MongoDB separados por vírgula | `localhost:27017` | Não |
+| `MONGODB_DATABASE` | Nome do database | `extrato` | Não |
+| `MONGODB_USERNAME` | Usuário do MongoDB | `` | Não |
+| `MONGODB_PASSWORD` | Senha do MongoDB | `` | Não |
+| `MONGODB_URI` | URI completa (sobrescreve configurações acima) | `` | Não |
+| `MONGODB_CONNECT_TIMEOUT` | Timeout para conexão | `10s` | Não |
+| `MONGODB_QUERY_TIMEOUT` | Timeout para queries | `10s` | Não |
+| `MONGODB_MAX_POOL_SIZE` | Tamanho máximo do pool de conexões | `100` | Não |
+| `MONGODB_MIN_POOL_SIZE` | Tamanho mínimo do pool de conexões | `10` | Não |
+| **Server** |
+| `PORT` | Porta do servidor HTTP | `8085` | Não |
+| `SERVER_READ_TIMEOUT` | Timeout de leitura HTTP | `10s` | Não |
+| `SERVER_WRITE_TIMEOUT` | Timeout de escrita HTTP | `10s` | Não |
+| **Application** |
+| `ENVIRONMENT` | Ambiente de execução | `development` | Não |
+| `LOG_LEVEL` | Nível de log | `info` | Não |
+
+### 8.6 Simulador
+
+Gerador de eventos para testes e demonstrações.
+
+| Variável | Descrição | Padrão | Obrigatório |
+|----------|-----------|--------|-------------|
+| **Kafka** |
+| `KAFKA_BROKERS` | Lista de brokers separados por vírgula | `localhost:9092` | Não |
+| `KAFKA_TOPIC_CONTA_CRIADA` | Tópico para criação de contas | `conta_criada` | Não |
+| `KAFKA_TOPIC_CONTA_MOVIMENTACAO` | Tópico para movimentações | `conta_movimentacao` | Não |
+| `KAFKA_REQUIRED_ACKS` | Acks necessários (0=NoResponse, 1=Leader, -1=All) | `1` | Não |
+| `KAFKA_ASYNC` | Modo assíncrono | `true` | Não |
+| `KAFKA_BATCH_SIZE` | Tamanho do batch | `100` | Não |
+| `KAFKA_BATCH_TIMEOUT` | Timeout do batch | `10ms` | Não |
+| `KAFKA_COMPRESSION` | Compressão (snappy, gzip, lz4, zstd, none) | `snappy` | Não |
+| **Simulation** |
+| `SIM_NUM_CONTAS` | Número de contas a criar | `10` | Não |
+| `SIM_CONTINUOUS_MODE` | Modo contínuo (true/false) | `false` | Não |
+| `SIM_NUM_MOVIMENTACOES` | Número de movimentações (modo batch) | `100` | Não |
+| `SIM_NUM_WORKERS` | Número de workers paralelos | `10` | Não |
+| `SIM_EVENTS_PER_WORKER` | Eventos por worker antes de dormir (modo contínuo) | `1` | Não |
+| `SIM_SLEEP_BETWEEN_EVENTS` | Sleep entre eventos (modo contínuo) | `1s` | Não |
+| `SIM_CREDITO_PROBABILITY` | Probabilidade de crédito (0.0-1.0) | `0.7` | Não |
+| `SIM_TRANSFER_PROBABILITY` | Probabilidade de transferência (0.0-1.0) | `0.2` | Não |
+| `SIM_WAIT_AFTER_CREATE` | Tempo de espera após criar contas | `10s` | Não |
+| **Application** |
+| `ENVIRONMENT` | Ambiente de execução | `development` | Não |
+| `LOG_LEVEL` | Nível de log | `info` | Não |
+
+---
+
+## 9. Imagens Docker
+
+Todas as imagens estão disponíveis no Docker Hub e são otimizadas para produção com builds multi-stage.
+
+| Imagem | Descrição | Tamanho (Uncompressed) | Tamanho (Compressed) |
+|--------|-----------|------------------------|----------------------|
+| `fidelissauro/ledger-event-sourcing:latest` | Ledger Service - Event Store principal | 66.7MB | 32MB |
+| `fidelissauro/ledger-balance:latest` | Balance Ingestion - Atualiza ScyllaDB com as informações de saldo | 53.2MB | 25.8MB |
+| `fidelissauro/ledger-balance-api:latest` | Balance API - Consulta de saldos | 68.3MB | 33.3MB |
+| `fidelissauro/ledger-statement:latest` | Statement Ingestion - Atualiza MongoDB com os extratos | 60MB | 29.3MB |
+| `fidelissauro/ledger-statement-api:latest` | Statement API - Consulta de extratos | 75.4MB | 36.9MB |
+| `fidelissauro/ledger-simulador:latest` | Simulador - Gerador de eventos | 46.6MB | 22.5MB |
+
+---
+

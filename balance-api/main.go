@@ -2,9 +2,9 @@ package main
 
 import (
 	"log"
-	"os"
-	"strings"
+	"net/http"
 
+	"balance-api/pkg/config"
 	"balance-api/pkg/scylla"
 	"balance-api/routes"
 
@@ -14,10 +14,15 @@ import (
 func main() {
 	log.Println("Iniciando Balance API")
 
-	scyllaHosts := getEnv("SCYLLA_HOSTS", "localhost")
-	port := getEnv("PORT", "8083")
+	// Carrega configurações
+	cfg := config.Load()
 
-	scyllaClient, err := scylla.NewClient(strings.Split(scyllaHosts, ","))
+	// Set Gin mode based on environment
+	if cfg.App.Environment == "production" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	scyllaClient, err := scylla.NewClient(cfg)
 	if err != nil {
 		log.Fatalf("Erro ao conectar ao ScyllaDB: %v", err)
 	}
@@ -27,20 +32,28 @@ func main() {
 
 	balanceHandler := routes.NewBalanceHandler(scyllaClient)
 
+	// Health check endpoint
 	router.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
+		c.JSON(200, gin.H{
+			"status":      "ok",
+			"service":     "balance-api",
+			"environment": cfg.App.Environment,
+		})
 	})
+
+	// Balance endpoints
 	router.GET("/balance/:account_id", balanceHandler.GetBalance)
 
-	log.Printf("Balance API rodando na porta %s", port)
-	if err := router.Run(":" + port); err != nil {
+	// Configure HTTP server with timeouts
+	srv := &http.Server{
+		Addr:         ":" + cfg.Server.Port,
+		Handler:      router,
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
+	}
+
+	log.Printf("Balance API rodando na porta %s (environment: %s)", cfg.Server.Port, cfg.App.Environment)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Erro ao iniciar servidor: %v", err)
 	}
-}
-
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }

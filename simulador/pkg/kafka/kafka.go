@@ -4,8 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
-	"time"
+	"simulador/pkg/config"
 
 	kafkago "github.com/segmentio/kafka-go"
 )
@@ -14,23 +13,53 @@ import (
 type Producer struct {
 	writer *kafkago.Writer
 	topic  string
+	config *config.Config
 }
 
 // NewProducer cria um novo producer para um tópico específico
-func NewProducer(brokers []string, topic string) *Producer {
+func NewProducer(cfg *config.Config, topic string) *Producer {
+	// Mapeia compression string para kafka-go compression
+	var compression kafkago.Compression
+	switch cfg.Kafka.Compression {
+	case "gzip":
+		compression = kafkago.Gzip
+	case "snappy":
+		compression = kafkago.Snappy
+	case "lz4":
+		compression = kafkago.Lz4
+	case "zstd":
+		compression = kafkago.Zstd
+	default:
+		compression = kafkago.Snappy
+	}
+
+	// Mapeia RequiredAcks
+	var requiredAcks kafkago.RequiredAcks
+	switch cfg.Kafka.RequiredAcks {
+	case -1:
+		requiredAcks = kafkago.RequireAll
+	case 0:
+		requiredAcks = kafkago.RequireNone
+	case 1:
+		requiredAcks = kafkago.RequireOne
+	default:
+		requiredAcks = kafkago.RequireOne
+	}
+
 	return &Producer{
 		writer: &kafkago.Writer{
-			Addr:                   kafkago.TCP(brokers...),
+			Addr:                   kafkago.TCP(cfg.Kafka.Brokers...),
 			Topic:                  topic,
 			Balancer:               &kafkago.LeastBytes{},
 			AllowAutoTopicCreation: true,
-			RequiredAcks:           kafkago.RequireOne, // Mudado de RequireAll para RequireOne
-			Async:                  true,               // Habilita modo assíncrono
-			BatchSize:              100,                // Batch de 100 mensagens
-			BatchTimeout:           10 * time.Millisecond,
-			Compression:            kafkago.Snappy, // Compressão para reduzir network I/O
+			RequiredAcks:           requiredAcks,
+			Async:                  cfg.Kafka.Async,
+			BatchSize:              cfg.Kafka.BatchSize,
+			BatchTimeout:           cfg.Kafka.BatchTimeout,
+			Compression:            compression,
 		},
-		topic: topic,
+		topic:  topic,
+		config: cfg,
 	}
 }
 
@@ -67,9 +96,4 @@ func (p *Producer) PublishBatch(ctx context.Context, messages []kafkago.Message)
 // Close fecha o writer
 func (p *Producer) Close() error {
 	return p.writer.Close()
-}
-
-// ParseBrokers converte string de brokers separada por vírgula em slice
-func ParseBrokers(brokersStr string) []string {
-	return strings.Split(brokersStr, ",")
 }

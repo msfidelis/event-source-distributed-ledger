@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ledger/internal/models"
+	"ledger/pkg/config"
 	"ledger/pkg/events"
 	"ledger/pkg/kafka"
 
@@ -15,44 +16,38 @@ import (
 	"github.com/uptrace/bun"
 )
 
-const TopicLedgerNovaContaRegistrada = "ledger_nova_conta_registrada"
-const TopicLedgerSaldoAtualizado = "ledger_saldo_atualizado"
-const TopicContaCriada = "conta_criada"
-const ListenerContaCriada = "ledger-account-group"
-
 // Listener processa eventos relacionados a contas
 type Listener struct {
 	db       *bun.DB
-	brokers  []string
-	topic    string
-	groupID  string
+	config   *config.Config
 	producer *kafka.Producer
 }
 
 // NewListener cria uma nova instância do AccountListener
-func NewListener(db *bun.DB, brokers []string) (*Listener, error) {
+func NewListener(db *bun.DB, cfg *config.Config) (*Listener, error) {
 	// Cria o produtor para publicar confirmações
-	producer, err := kafka.NewProducer(brokers)
+	producer, err := kafka.NewProducer(cfg.Kafka.Brokers)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao criar produtor: %w", err)
 	}
 
 	return &Listener{
 		db:       db,
-		brokers:  brokers,
-		topic:    TopicContaCriada,
-		groupID:  ListenerContaCriada,
+		config:   cfg,
 		producer: producer,
 	}, nil
 }
 
 // StartConsuming inicia o consumidor Kafka para eventos de conta criada
 func (l *Listener) StartConsuming(ctx context.Context) error {
-	log.Printf("[Account] Iniciando listener para tópico: %s (group: %s)", l.topic, l.groupID)
+	topic := l.config.Kafka.TopicContaCriada
+	groupID := l.config.Kafka.GroupAccountListener
 
-	consumer := kafka.NewConsumer(l.brokers, l.topic, l.groupID)
+	log.Printf("[Account] Iniciando listener para tópico: %s (group: %s)", topic, groupID)
+
+	consumer := kafka.NewConsumer(l.config.Kafka.Brokers, topic, groupID)
 	defer func() {
-		log.Printf("[Account] Fechando consumer do tópico: %s", l.topic)
+		log.Printf("[Account] Fechando consumer do tópico: %s", topic)
 		consumer.Close()
 		l.producer.Close()
 	}()
@@ -200,13 +195,14 @@ func (l *Listener) publishConfirmation(conta events.ContaCriada, eventID int64) 
 		return fmt.Errorf("erro ao serializar confirmação: %w", err)
 	}
 
+	topic := l.config.Kafka.TopicNovaContaRegistrada
 	// Publica no tópico de confirmações
-	if err := l.producer.Publish(TopicLedgerNovaContaRegistrada, []byte(conta.ContaID.String()), confirmationJSON); err != nil {
-		return fmt.Errorf("erro ao publicar no tópico %s: %w", TopicLedgerNovaContaRegistrada, err)
+	if err := l.producer.Publish(topic, []byte(conta.ContaID.String()), confirmationJSON); err != nil {
+		return fmt.Errorf("erro ao publicar no tópico %s: %w", topic, err)
 	}
 
 	log.Printf("[Account] Confirmação publicada no tópico %s: conta_id=%s, event_id=%d",
-		TopicLedgerNovaContaRegistrada, conta.ContaID, eventID)
+		topic, conta.ContaID, eventID)
 	return nil
 }
 
@@ -224,9 +220,10 @@ func (l *Listener) publishBalanceUpdate(contaID uuid.UUID, balance float64, vers
 		return fmt.Errorf("erro ao serializar saldo atualizado: %w", err)
 	}
 
+	topic := l.config.Kafka.TopicSaldoAtualizado
 	// Publica no tópico de saldo atualizado
-	if err := l.producer.Publish(TopicLedgerSaldoAtualizado, []byte(contaID.String()), balanceJSON); err != nil {
-		return fmt.Errorf("erro ao publicar no tópico %s: %w", TopicLedgerSaldoAtualizado, err)
+	if err := l.producer.Publish(topic, []byte(contaID.String()), balanceJSON); err != nil {
+		return fmt.Errorf("erro ao publicar no tópico %s: %w", topic, err)
 	}
 
 	log.Printf("[Account] Saldo atualizado publicado: conta_id=%s, balance=%.2f, version=%d",

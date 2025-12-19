@@ -5,11 +5,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"balance/listeners/accounts"
 	"balance/listeners/balance"
+	"balance/pkg/config"
 	"balance/pkg/kafka"
 	"balance/pkg/scylla"
 )
@@ -17,12 +17,11 @@ import (
 func main() {
 	log.Println("Iniciando Balance Ingestion Service...")
 
-	// Lê configurações das variáveis de ambiente
-	kafkaBrokers := getEnv("KAFKA_BROKERS", "localhost:9092")
-	scyllaHosts := getEnv("SCYLLA_HOSTS", "localhost")
+	// Carrega configurações
+	cfg := config.Load()
 
 	// Conecta ao ScyllaDB
-	scyllaClient, err := scylla.NewClient(strings.Split(scyllaHosts, ","))
+	scyllaClient, err := scylla.NewClient(cfg.Scylla.Hosts)
 	if err != nil {
 		log.Fatalf("Erro ao conectar ao ScyllaDB: %v", err)
 	}
@@ -47,21 +46,21 @@ func main() {
 	}()
 
 	// Cria listeners
-	balanceListener := balance.NewListener(scyllaClient)
-	accountsListener := accounts.NewListener(scyllaClient)
+	balanceListener := balance.NewListener(scyllaClient, cfg)
+	accountsListener := accounts.NewListener(scyllaClient, cfg)
 
-	// Cria consumers
+	// Cria consumers usando configurações
 	balanceConsumer := kafka.NewConsumer(
-		kafka.ParseBrokers(kafkaBrokers),
-		"ledger_saldo_atualizado",
-		"balance-ingestion-group",
+		cfg.Kafka.Brokers,
+		cfg.Kafka.TopicSaldoAtualizado,
+		cfg.Kafka.GroupBalanceIngestion,
 	)
 	defer balanceConsumer.Close()
 
 	accountsConsumer := kafka.NewConsumer(
-		kafka.ParseBrokers(kafkaBrokers),
-		"ledger_nova_conta_registrada",
-		"balance-accounts-group",
+		cfg.Kafka.Brokers,
+		cfg.Kafka.TopicNovaContaRegistrada,
+		cfg.Kafka.GroupAccountsIngestion,
 	)
 	defer accountsConsumer.Close()
 
@@ -70,7 +69,7 @@ func main() {
 
 	// Inicia consumer de saldos em goroutine
 	go func() {
-		log.Println("Iniciando consumo de mensagens do tópico ledger_saldo_atualizado...")
+		log.Printf("Iniciando consumo de mensagens do tópico %s...", cfg.Kafka.TopicSaldoAtualizado)
 		if err := balanceConsumer.Consume(ctx, balanceListener.HandleMessage); err != nil {
 			if err != context.Canceled {
 				errChan <- err
@@ -80,7 +79,7 @@ func main() {
 
 	// Inicia consumer de contas em goroutine
 	go func() {
-		log.Println("Iniciando consumo de mensagens do tópico ledger_nova_conta_registrada...")
+		log.Printf("Iniciando consumo de mensagens do tópico %s...", cfg.Kafka.TopicNovaContaRegistrada)
 		if err := accountsConsumer.Consume(ctx, accountsListener.HandleMessage); err != nil {
 			if err != context.Canceled {
 				errChan <- err
@@ -95,11 +94,4 @@ func main() {
 	case <-ctx.Done():
 		log.Println("Balance Ingestion Service encerrado")
 	}
-}
-
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }

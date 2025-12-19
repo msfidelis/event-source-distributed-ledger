@@ -5,16 +5,19 @@ import (
 	"log"
 
 	"balance/internal/models"
+	"balance/pkg/config"
 	"balance/pkg/scylla"
 )
 
 type Listener struct {
 	scyllaClient *scylla.Client
+	config       *config.Config
 }
 
-func NewListener(scyllaClient *scylla.Client) *Listener {
+func NewListener(scyllaClient *scylla.Client, cfg *config.Config) *Listener {
 	return &Listener{
 		scyllaClient: scyllaClient,
+		config:       cfg,
 	}
 }
 

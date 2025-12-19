@@ -1,26 +1,50 @@
 package scylla
 
 import (
+	"balance-api/pkg/config"
 	"log"
-	"time"
 
 	"github.com/gocql/gocql"
 )
 
 type Client struct {
 	session *gocql.Session
+	config  *config.Config
 }
 
-func NewClient(hosts []string) (*Client, error) {
-	cluster := gocql.NewCluster(hosts...)
-	cluster.Keyspace = "balance_ks"
-	cluster.Consistency = gocql.Quorum
-	cluster.Timeout = 10 * time.Second
-	cluster.ConnectTimeout = 10 * time.Second
-	cluster.ProtoVersion = 4
-	cluster.RetryPolicy = &gocql.SimpleRetryPolicy{NumRetries: 3}
+func NewClient(cfg *config.Config) (*Client, error) {
+	cluster := gocql.NewCluster(cfg.Scylla.Hosts...)
+	cluster.Keyspace = cfg.Scylla.Keyspace
 
-	log.Printf("[ScyllaDB] Conectando aos hosts: %v", hosts)
+	// Set consistency level
+	switch cfg.Scylla.Consistency {
+	case "ONE":
+		cluster.Consistency = gocql.One
+	case "QUORUM":
+		cluster.Consistency = gocql.Quorum
+	case "ALL":
+		cluster.Consistency = gocql.All
+	case "LOCAL_QUORUM":
+		cluster.Consistency = gocql.LocalQuorum
+	default:
+		cluster.Consistency = gocql.Quorum
+	}
+
+	cluster.Timeout = cfg.Scylla.Timeout
+	cluster.ConnectTimeout = cfg.Scylla.ConnectTimeout
+	cluster.ProtoVersion = cfg.Scylla.ProtoVersion
+	cluster.RetryPolicy = &gocql.SimpleRetryPolicy{NumRetries: cfg.Scylla.RetryAttempts}
+
+	// Set authentication if provided
+	if cfg.Scylla.Username != "" && cfg.Scylla.Password != "" {
+		cluster.Authenticator = gocql.PasswordAuthenticator{
+			Username: cfg.Scylla.Username,
+			Password: cfg.Scylla.Password,
+		}
+	}
+
+	log.Printf("[ScyllaDB] Conectando aos hosts: %v", cfg.Scylla.Hosts)
+	log.Printf("[ScyllaDB] Keyspace: %s, Consistency: %s", cfg.Scylla.Keyspace, cfg.Scylla.Consistency)
 
 	session, err := cluster.CreateSession()
 	if err != nil {
@@ -29,7 +53,10 @@ func NewClient(hosts []string) (*Client, error) {
 
 	log.Printf("[ScyllaDB] Conexão estabelecida com sucesso")
 
-	return &Client{session: session}, nil
+	return &Client{
+		session: session,
+		config:  cfg,
+	}, nil
 }
 
 func (c *Client) GetBalance(id string) (float64, error) {
