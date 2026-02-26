@@ -69,14 +69,17 @@ func (l *Listener) StartConsuming(ctx context.Context) error {
 }
 
 // Handle processa o evento de movimentação de conta
-func (l *Listener) Handle(key, value []byte) error {
+func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	startTime := time.Now()
 	eventType := events.EventTypeContaMovimentacao
 	listener := "transaction"
 
+	log.Printf("[Transaction] [CorrelationID: %s] Processando evento de movimentação", correlationID)
+
 	var envelope events.EventEnvelope
 	if err := json.Unmarshal(value, &envelope); err != nil {
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "unmarshal_error").Inc()
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao deserializar envelope: %v", correlationID, err)
 		return fmt.Errorf("erro ao deserializar envelope: %w", err)
 	}
 
@@ -84,12 +87,14 @@ func (l *Listener) Handle(key, value []byte) error {
 	dataBytes, err := json.Marshal(envelope.Data)
 	if err != nil {
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "marshal_error").Inc()
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao serializar data: %v", correlationID, err)
 		return fmt.Errorf("erro ao serializar data: %w", err)
 	}
 
 	var movimentacao events.ContaMovimentacao
 	if err := json.Unmarshal(dataBytes, &movimentacao); err != nil {
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "unmarshal_data_error").Inc()
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao deserializar ContaMovimentacao: %v", correlationID, err)
 		return fmt.Errorf("erro ao deserializar ContaMovimentacao: %w", err)
 	}
 
@@ -98,14 +103,14 @@ func (l *Listener) Handle(key, value []byte) error {
 		ctxRL := context.Background()
 		allowed, err := l.rateLimiter.ShouldRateLimit(ctxRL, "ledger-transactions", "account", movimentacao.ContaID.String())
 		if err != nil {
-			log.Printf("[Transaction] Erro ao verificar rate limit: %v", err)
+			log.Printf("[Transaction] [CorrelationID: %s] Erro ao verificar rate limit: %v", correlationID, err)
 			// Continua processamento em caso de erro no rate limiter
 		} else if !allowed {
 			metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "rate_limited").Inc()
 
 			// Publica evento no tópico de rate limited
-			if err := l.publishRateLimitedEvent(movimentacao, key, value); err != nil {
-				log.Printf("[Transaction] Erro ao publicar evento rate limited: %v", err)
+			if err := l.publishRateLimitedEvent(movimentacao, key, value, correlationID); err != nil {
+				log.Printf("[Transaction] [CorrelationID: %s] Erro ao publicar evento rate limited: %v", correlationID, err)
 			}
 
 			return fmt.Errorf("requisição bloqueada por rate limit para conta: %s", movimentacao.ContaID)
@@ -121,20 +126,21 @@ func (l *Listener) Handle(key, value []byte) error {
 		// Persiste no event store
 		var err error
 		eventID, err = l.saveEventTx(ctx, tx, movimentacao.ContaID, "Account",
-			events.EventTypeContaMovimentacao, dataBytes, envelope.Metadata)
+			events.EventTypeContaMovimentacao, dataBytes, envelope.Metadata, correlationID)
 		if err != nil {
 			tx.Rollback()
 			metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "save_event_error").Inc()
+			log.Printf("[Transaction] [CorrelationID: %s] Erro ao salvar evento: %v", correlationID, err)
 			return fmt.Errorf("erro ao salvar evento: %w", err)
 		}
 
-		log.Printf("[Transaction] Evento persistido: ContaMovimentacao - ID=%d, Conta=%s (%s) - R$ %.2f",
-			eventID, movimentacao.ContaID, movimentacao.Tipo, movimentacao.Valor)
+		log.Printf("[Transaction] [CorrelationID: %s] Evento persistido: ContaMovimentacao - ID=%d, Conta=%s (%s) - R$ %.2f",
+			correlationID, eventID, movimentacao.ContaID, movimentacao.Tipo, movimentacao.Valor)
 
 		// Atualiza saldo da conta e registra transação
-		balanceAfter, err = l.processTransactionTx(ctx, tx, movimentacao)
+		balanceAfter, err = l.processTransactionTx(ctx, tx, movimentacao, correlationID)
 		if err != nil {
-			log.Printf("[Transaction] Erro ao processar transação: %v", err)
+			log.Printf("[Transaction] [CorrelationID: %s] Erro ao processar transação: %v", correlationID, err)
 			tx.Rollback()
 			metrics.TransactionsRollbackTotal.WithLabelValues("processing_error").Inc()
 			metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "process_transaction_error").Inc()
@@ -150,8 +156,8 @@ func (l *Listener) Handle(key, value []byte) error {
 	}
 
 	// Publica confirmação após commit da transação
-	if err := l.publishConfirmation(movimentacao, eventID, balanceAfter); err != nil {
-		log.Printf("[Transaction] Erro ao publicar confirmação: %v", err)
+	if err := l.publishConfirmation(movimentacao, eventID, balanceAfter, correlationID); err != nil {
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao publicar confirmação: %v", correlationID, err)
 	}
 
 	// Métricas de sucesso
@@ -160,11 +166,19 @@ func (l *Listener) Handle(key, value []byte) error {
 	metrics.TransactionsProcessedTotal.WithLabelValues(string(movimentacao.Tipo)).Inc()
 	metrics.TransactionsPerAccount.WithLabelValues(movimentacao.ContaID.String()).Inc()
 
+	log.Printf("[Transaction] [CorrelationID: %s] Processamento concluído com sucesso", correlationID)
+
 	return nil
 }
 
-func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.UUID, aggregateType, eventType string, eventData []byte, metadata map[string]string) (int64, error) {
+func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.UUID, aggregateType, eventType string, eventData []byte, metadata map[string]string, correlationID string) (int64, error) {
 	startTime := time.Now()
+
+	// Adiciona correlationID ao metadata
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	metadata["correlationID"] = correlationID
 
 	// Obtém a versão atual do agregado
 	var version int
@@ -175,6 +189,7 @@ func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.
 		Scan(ctx, &version)
 	if err != nil {
 		metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao obter versão: %v", correlationID, err)
 		return 0, fmt.Errorf("erro ao obter versão: %w", err)
 	}
 
@@ -182,6 +197,7 @@ func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao serializar metadata: %v", correlationID, err)
 		return 0, fmt.Errorf("erro ao serializar metadata: %w", err)
 	}
 
@@ -204,10 +220,11 @@ func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.
 	if err != nil {
 		// Detecta conflitos de versão (optimistic locking)
 		if isVersionConflict(err) {
-			log.Printf("[Transaction] Version conflict: %v", aggregateID)
+			log.Printf("[Transaction] [CorrelationID: %s] Version conflict: %v", correlationID, aggregateID)
 			metrics.EventsVersionConflictsTotal.WithLabelValues(aggregateType).Inc()
 			metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "version_conflict").Inc()
 		} else {
+			log.Printf("[Transaction] [CorrelationID: %s] Erro ao inserir evento: %v", correlationID, err)
 			metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
 		}
 		return 0, err
@@ -227,7 +244,7 @@ func isVersionConflict(err error) bool {
 		err.Error() == "unique_violation")
 }
 
-func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov events.ContaMovimentacao) (float64, error) {
+func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov events.ContaMovimentacao, correlationID string) (float64, error) {
 	// Obtém saldo atual da conta
 	var account models.Account
 	err := tx.NewSelect().
@@ -235,6 +252,7 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 		Where("aggregate_id = ?", mov.ContaID).
 		Scan(ctx)
 	if err != nil {
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao obter saldo: %v", correlationID, err)
 		return 0, fmt.Errorf("erro ao obter saldo: %w", err)
 	}
 
@@ -251,6 +269,7 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 	// Valida saldo negativo
 	if newBalance < 0 {
 		metrics.TransactionsRollbackTotal.WithLabelValues("negative_balance").Inc()
+		log.Printf("[Transaction] [CorrelationID: %s] Saldo insuficiente: saldo atual=%.2f, valor=%.2f", correlationID, currentBalance, mov.Valor)
 		return 0, fmt.Errorf("saldo insuficiente: saldo atual=%.2f, valor=%.2f", currentBalance, mov.Valor)
 	}
 
@@ -262,6 +281,7 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 		Where("aggregate_id = ?", mov.ContaID).
 		Exec(ctx)
 	if err != nil {
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao atualizar saldo: %v", correlationID, err)
 		return 0, fmt.Errorf("erro ao atualizar saldo: %w", err)
 	}
 
@@ -281,11 +301,12 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 		Model(transaction).
 		Exec(ctx)
 	if err != nil {
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao registrar transação: %v", correlationID, err)
 		return 0, fmt.Errorf("erro ao registrar transação: %w", err)
 	}
 
-	log.Printf("[Transaction] Transação processada: %s - Saldo: R$ %.2f → R$ %.2f",
-		mov.ContaID, currentBalance, newBalance)
+	log.Printf("[Transaction] [CorrelationID: %s] Transação processada: %s - Saldo: R$ %.2f → R$ %.2f",
+		correlationID, mov.ContaID, currentBalance, newBalance)
 
 	// Obtém versão atual da conta para publicar com saldo
 	var version int
@@ -295,18 +316,18 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 		Where("aggregate_id = ?", mov.ContaID).
 		Scan(ctx, &version)
 	if err != nil {
-		log.Printf("[Transaction] Erro ao obter versão: %v", err)
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao obter versão: %v", correlationID, err)
 	}
 
 	// Publica evento de saldo atualizado
-	if err := l.publishBalanceUpdate(mov.ContaID, newBalance, version); err != nil {
-		log.Printf("[Transaction] Erro ao publicar saldo atualizado: %v", err)
+	if err := l.publishBalanceUpdate(mov.ContaID, newBalance, version, correlationID); err != nil {
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao publicar saldo atualizado: %v", correlationID, err)
 	}
 
 	return newBalance, nil
 }
 
-func (l *Listener) publishConfirmation(mov events.ContaMovimentacao, eventID int64, balanceAfter float64) error {
+func (l *Listener) publishConfirmation(mov events.ContaMovimentacao, eventID int64, balanceAfter float64, correlationID string) error {
 	// Cria mensagem de confirmação
 	confirmation := map[string]interface{}{
 		"event_id":        eventID,
@@ -322,21 +343,26 @@ func (l *Listener) publishConfirmation(mov events.ContaMovimentacao, eventID int
 
 	confirmationJSON, err := json.Marshal(confirmation)
 	if err != nil {
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao serializar confirmação: %v", correlationID, err)
 		return fmt.Errorf("erro ao serializar confirmação: %w", err)
 	}
 
 	topic := l.config.Kafka.TopicNovaTransacaoConfirmada
-	// Publica no tópico de confirmações
-	if err := l.producer.Publish(topic, []byte(mov.ContaID.String()), confirmationJSON); err != nil {
+	headers := map[string]string{
+		"correlationID": correlationID,
+	}
+	// Publica no tópico de confirmações com headers
+	if err := l.producer.PublishWithHeaders(topic, []byte(mov.ContaID.String()), confirmationJSON, headers); err != nil {
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao publicar no tópico %s: %v", correlationID, topic, err)
 		return fmt.Errorf("erro ao publicar no tópico %s: %w", topic, err)
 	}
 
-	log.Printf("[Transaction] Confirmação publicada no tópico %s: movimentacao_id=%s, event_id=%d",
-		topic, mov.MovimentacaoID, eventID)
+	log.Printf("[Transaction] [CorrelationID: %s] Confirmação publicada no tópico %s: movimentacao_id=%s, event_id=%d",
+		correlationID, topic, mov.MovimentacaoID, eventID)
 	return nil
 }
 
-func (l *Listener) publishBalanceUpdate(contaID uuid.UUID, balance float64, version int) error {
+func (l *Listener) publishBalanceUpdate(contaID uuid.UUID, balance float64, version int, correlationID string) error {
 	// Cria mensagem de saldo atualizado
 	balanceUpdate := map[string]interface{}{
 		"conta_id":  contaID,
@@ -347,30 +373,39 @@ func (l *Listener) publishBalanceUpdate(contaID uuid.UUID, balance float64, vers
 
 	balanceJSON, err := json.Marshal(balanceUpdate)
 	if err != nil {
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao serializar saldo atualizado: %v", correlationID, err)
 		return fmt.Errorf("erro ao serializar saldo atualizado: %w", err)
 	}
 
 	topic := l.config.Kafka.TopicSaldoAtualizado
-	// Publica no tópico de saldo atualizado
-	if err := l.producer.Publish(topic, []byte(contaID.String()), balanceJSON); err != nil {
+	headers := map[string]string{
+		"correlationID": correlationID,
+	}
+	// Publica no tópico de saldo atualizado com headers
+	if err := l.producer.PublishWithHeaders(topic, []byte(contaID.String()), balanceJSON, headers); err != nil {
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao publicar no tópico %s: %v", correlationID, topic, err)
 		return fmt.Errorf("erro ao publicar no tópico %s: %w", topic, err)
 	}
 
-	log.Printf("[Transaction] Saldo atualizado publicado: conta_id=%s, balance=%.2f, version=%d",
-		contaID, balance, version)
+	log.Printf("[Transaction] [CorrelationID: %s] Saldo atualizado publicado: conta_id=%s, balance=%.2f, version=%d",
+		correlationID, contaID, balance, version)
 
 	return nil
 }
 
-func (l *Listener) publishRateLimitedEvent(mov events.ContaMovimentacao, key []byte, value []byte) error {
+func (l *Listener) publishRateLimitedEvent(mov events.ContaMovimentacao, key []byte, value []byte, correlationID string) error {
 	topic := l.config.Kafka.TopicTransacaoRateLimited
-	// Publica no tópico de transações bloqueadas por rate limit
-	if err := l.producer.Publish(topic, key, value); err != nil {
+	headers := map[string]string{
+		"correlationID": correlationID,
+	}
+	// Publica no tópico de transações bloqueadas por rate limit com headers
+	if err := l.producer.PublishWithHeaders(topic, key, value, headers); err != nil {
+		log.Printf("[Transaction] [CorrelationID: %s] Erro ao publicar no tópico %s: %v", correlationID, topic, err)
 		return fmt.Errorf("erro ao publicar no tópico %s: %w", topic, err)
 	}
 
-	log.Printf("[Transaction] Evento rate limited publicado no tópico %s: conta_id=%s, movimentacao_id=%s",
-		topic, mov.ContaID, mov.MovimentacaoID)
+	log.Printf("[Transaction] [CorrelationID: %s] Evento rate limited publicado no tópico %s: conta_id=%s, movimentacao_id=%s",
+		correlationID, topic, mov.ContaID, mov.MovimentacaoID)
 
 	return nil
 }

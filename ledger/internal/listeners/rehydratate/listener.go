@@ -62,31 +62,35 @@ func (l *Listener) StartConsuming(ctx context.Context) error {
 }
 
 // Handle processa solicitação de rehydratation
-func (l *Listener) Handle(key, value []byte) error {
+func (l *Listener) Handle(key, value []byte, correlationID string) error {
+	log.Printf("[Rehydrate] [CorrelationID: %s] Processando solicitação de rehydratation", correlationID)
+
 	var request RehydrateRequest
 	if err := json.Unmarshal(value, &request); err != nil {
+		log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao deserializar request: %v", correlationID, err)
 		return fmt.Errorf("erro ao deserializar request: %w", err)
 	}
 
-	log.Printf("[Rehydrate] Iniciando rehydratation para aggregate_id=%s", request.AggregateID)
+	log.Printf("[Rehydrate] [CorrelationID: %s] Iniciando rehydratation para aggregate_id=%s", correlationID, request.AggregateID)
 
 	ctx := context.Background()
 
 	// Busca todos os eventos do agregado
 	events, err := l.fetchEvents(ctx, request.AggregateID, request.StartDate, request.EndDate)
 	if err != nil {
+		log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao buscar eventos: %v", correlationID, err)
 		return fmt.Errorf("erro ao buscar eventos: %w", err)
 	}
 
 	if len(events) == 0 {
-		log.Printf("[Rehydrate] Nenhum evento encontrado para aggregate_id=%s", request.AggregateID)
+		log.Printf("[Rehydrate] [CorrelationID: %s] Nenhum evento encontrado para aggregate_id=%s", correlationID, request.AggregateID)
 		return nil
 	}
 
-	log.Printf("[Rehydrate] Encontrados %d eventos para reprocessar", len(events))
+	log.Printf("[Rehydrate] [CorrelationID: %s] Encontrados %d eventos para reprocessar", correlationID, len(events))
 
 	// Reprocessa eventos e republica
-	return l.reprocessEvents(ctx, events)
+	return l.reprocessEvents(ctx, events, correlationID)
 }
 
 // fetchEvents busca eventos do Event Store com filtros opcionais de data
@@ -113,72 +117,74 @@ func (l *Listener) fetchEvents(ctx context.Context, aggregateID uuid.UUID, start
 }
 
 // reprocessEvents reconstrói o estado e republica eventos
-func (l *Listener) reprocessEvents(ctx context.Context, eventList []models.Event) error {
+func (l *Listener) reprocessEvents(ctx context.Context, eventList []models.Event, correlationID string) error {
 	var balance float64
 	var ownerName string
 	var accountCreated bool
 
 	for _, event := range eventList {
-		log.Printf("[Rehydrate] Processando evento: id=%d, type=%s, version=%d",
-			event.ID, event.EventType, event.Version)
+		log.Printf("[Rehydrate] [CorrelationID: %s] Processando evento: id=%d, type=%s, version=%d",
+			correlationID, event.ID, event.EventType, event.Version)
 
 		switch event.EventType {
 		case events.EventTypeContaCriada:
-			if err := l.reprocessAccountCreated(event, &balance, &ownerName); err != nil {
-				log.Printf("[Rehydrate] Erro ao reprocessar AccountCreated: %v", err)
+			if err := l.reprocessAccountCreated(event, &balance, &ownerName, correlationID); err != nil {
+				log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao reprocessar AccountCreated: %v", correlationID, err)
 				continue
 			}
 			accountCreated = true
 
 		case events.EventTypeContaMovimentacao:
 			if !accountCreated {
-				log.Printf("[Rehydrate] Pulando movimentação - conta não foi criada ainda")
+				log.Printf("[Rehydrate] [CorrelationID: %s] Pulando movimentação - conta não foi criada ainda", correlationID)
 				continue
 			}
 
-			newBalance, err := l.reprocessTransaction(event, balance)
+			newBalance, err := l.reprocessTransaction(event, balance, correlationID)
 			if err != nil {
-				log.Printf("[Rehydrate] Erro ao reprocessar Transaction: %v", err)
+				log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao reprocessar Transaction: %v", correlationID, err)
 				continue
 			}
 			balance = newBalance
 
 			// Republica evento de transação confirmada
-			if err := l.republishTransactionConfirmed(event, balance); err != nil {
-				log.Printf("[Rehydrate] Erro ao republicar transação: %v", err)
+			if err := l.republishTransactionConfirmed(event, balance, correlationID); err != nil {
+				log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao republicar transação: %v", correlationID, err)
 			}
 		}
 
 		// Republica saldo atualizado após cada evento
-		if err := l.republishBalanceUpdate(event.AggregateID, balance, event.Version); err != nil {
-			log.Printf("[Rehydrate] Erro ao republicar saldo: %v", err)
+		if err := l.republishBalanceUpdate(event.AggregateID, balance, event.Version, correlationID); err != nil {
+			log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao republicar saldo: %v", correlationID, err)
 		}
 	}
 
-	log.Printf("[Rehydrate] Rehydratation concluída: aggregate_id=%s, saldo_final=%.2f",
-		eventList[0].AggregateID, balance)
+	log.Printf("[Rehydrate] [CorrelationID: %s] Rehydratation concluída: aggregate_id=%s, saldo_final=%.2f",
+		correlationID, eventList[0].AggregateID, balance)
 
 	return nil
 }
 
 // reprocessAccountCreated reconstrói o estado inicial da conta
-func (l *Listener) reprocessAccountCreated(event models.Event, balance *float64, ownerName *string) error {
+func (l *Listener) reprocessAccountCreated(event models.Event, balance *float64, ownerName *string, correlationID string) error {
 	var contaCriada events.ContaCriada
 	if err := json.Unmarshal(event.EventData, &contaCriada); err != nil {
+		log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao unmarshal ContaCriada: %v", correlationID, err)
 		return err
 	}
 
 	*balance = contaCriada.SaldoInicial
 	*ownerName = contaCriada.NomeProprietario
 
-	log.Printf("[Rehydrate] Conta criada: owner=%s, saldo_inicial=%.2f", *ownerName, *balance)
+	log.Printf("[Rehydrate] [CorrelationID: %s] Conta criada: owner=%s, saldo_inicial=%.2f", correlationID, *ownerName, *balance)
 	return nil
 }
 
 // reprocessTransaction reconstrói transação e calcula novo saldo
-func (l *Listener) reprocessTransaction(event models.Event, currentBalance float64) (float64, error) {
+func (l *Listener) reprocessTransaction(event models.Event, currentBalance float64, correlationID string) (float64, error) {
 	var movimentacao events.ContaMovimentacao
 	if err := json.Unmarshal(event.EventData, &movimentacao); err != nil {
+		log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao unmarshal ContaMovimentacao: %v", correlationID, err)
 		return currentBalance, err
 	}
 
@@ -189,16 +195,17 @@ func (l *Listener) reprocessTransaction(event models.Event, currentBalance float
 		newBalance = currentBalance - movimentacao.Valor
 	}
 
-	log.Printf("[Rehydrate] Transação: tipo=%s, valor=%.2f, saldo: %.2f → %.2f",
-		movimentacao.Tipo, movimentacao.Valor, currentBalance, newBalance)
+	log.Printf("[Rehydrate] [CorrelationID: %s] Transação: tipo=%s, valor=%.2f, saldo: %.2f → %.2f",
+		correlationID, movimentacao.Tipo, movimentacao.Valor, currentBalance, newBalance)
 
 	return newBalance, nil
 }
 
 // republishTransactionConfirmed republica evento de transação confirmada
-func (l *Listener) republishTransactionConfirmed(event models.Event, balanceAfter float64) error {
+func (l *Listener) republishTransactionConfirmed(event models.Event, balanceAfter float64, correlationID string) error {
 	var movimentacao events.ContaMovimentacao
 	if err := json.Unmarshal(event.EventData, &movimentacao); err != nil {
+		log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao unmarshal ContaMovimentacao: %v", correlationID, err)
 		return err
 	}
 
@@ -217,20 +224,25 @@ func (l *Listener) republishTransactionConfirmed(event models.Event, balanceAfte
 
 	confirmationJSON, err := json.Marshal(confirmation)
 	if err != nil {
+		log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao serializar confirmação: %v", correlationID, err)
 		return err
 	}
 
 	topic := l.config.Kafka.TopicNovaTransacaoConfirmada
-	if err := l.producer.Publish(topic, []byte(movimentacao.ContaID.String()), confirmationJSON); err != nil {
+	headers := map[string]string{
+		"correlationID": correlationID,
+	}
+	if err := l.producer.PublishWithHeaders(topic, []byte(movimentacao.ContaID.String()), confirmationJSON, headers); err != nil {
+		log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao publicar no tópico %s: %v", correlationID, topic, err)
 		return err
 	}
 
-	log.Printf("[Rehydrate] Transação republicada: movimentacao_id=%s", movimentacao.MovimentacaoID)
+	log.Printf("[Rehydrate] [CorrelationID: %s] Transação republicada: movimentacao_id=%s", correlationID, movimentacao.MovimentacaoID)
 	return nil
 }
 
 // republishBalanceUpdate republica evento de saldo atualizado
-func (l *Listener) republishBalanceUpdate(aggregateID uuid.UUID, balance float64, version int) error {
+func (l *Listener) republishBalanceUpdate(aggregateID uuid.UUID, balance float64, version int, correlationID string) error {
 	balanceUpdate := map[string]interface{}{
 		"conta_id":   aggregateID,
 		"balance":    balance,
@@ -241,16 +253,21 @@ func (l *Listener) republishBalanceUpdate(aggregateID uuid.UUID, balance float64
 
 	balanceJSON, err := json.Marshal(balanceUpdate)
 	if err != nil {
+		log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao serializar saldo atualizado: %v", correlationID, err)
 		return err
 	}
 
 	topic := l.config.Kafka.TopicSaldoAtualizado
-	if err := l.producer.Publish(topic, []byte(aggregateID.String()), balanceJSON); err != nil {
+	headers := map[string]string{
+		"correlationID": correlationID,
+	}
+	if err := l.producer.PublishWithHeaders(topic, []byte(aggregateID.String()), balanceJSON, headers); err != nil {
+		log.Printf("[Rehydrate] [CorrelationID: %s] Erro ao publicar no tópico %s: %v", correlationID, topic, err)
 		return err
 	}
 
-	log.Printf("[Rehydrate] Saldo republicado: conta_id=%s, balance=%.2f, version=%d",
-		aggregateID, balance, version)
+	log.Printf("[Rehydrate] [CorrelationID: %s] Saldo republicado: conta_id=%s, balance=%.2f, version=%d",
+		correlationID, aggregateID, balance, version)
 
 	return nil
 }

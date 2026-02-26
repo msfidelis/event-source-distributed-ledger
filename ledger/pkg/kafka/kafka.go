@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/IBM/sarama"
+	"github.com/google/uuid"
 )
 
 // Consumer representa um consumidor Kafka usando Sarama
@@ -22,8 +23,8 @@ type ConsumerGroupHandler struct {
 	topic   string
 }
 
-// MessageHandler é a função que processa cada mensagem
-type MessageHandler func(key, value []byte) error
+// MessageHandler é a função que processa cada mensagem com correlationID
+type MessageHandler func(key, value []byte, correlationID string) error
 
 // NewConsumer cria um novo consumer Kafka usando Sarama
 func NewConsumer(brokers []string, topic, groupID string) *Consumer {
@@ -64,15 +65,18 @@ func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, 
 
 			msgCount++
 
+			// Extrai ou gera correlationID dos headers
+			correlationID := extractOrGenerateCorrelationID(message.Headers)
+
 			// Log das primeiras 10 mensagens e depois a cada 1000
 			if msgCount <= 10 || msgCount%1000 == 0 {
-				log.Printf("[%s] Mensagem #%d recebida (partition=%d, offset=%d)",
-					h.topic, msgCount, message.Partition, message.Offset)
+				log.Printf("[%s] Mensagem #%d recebida (partition=%d, offset=%d, correlationID=%s)",
+					h.topic, msgCount, message.Partition, message.Offset, correlationID)
 			}
 
-			// Processa a mensagem
-			if err := h.handler(message.Key, message.Value); err != nil {
-				log.Printf("[Kafka] Erro ao processar mensagem offset %d: %v", message.Offset, err)
+			// Processa a mensagem com correlationID
+			if err := h.handler(message.Key, message.Value, correlationID); err != nil {
+				log.Printf("[Kafka] Erro ao processar mensagem offset %d (correlationID=%s): %v", message.Offset, correlationID, err)
 				// Mesmo com erro, marca a mensagem como processada para não travar o consumer
 			}
 
@@ -187,14 +191,40 @@ func NewProducer(brokers []string) (*Producer, error) {
 
 // Publish publica uma mensagem em um tópico específico
 func (p *Producer) Publish(topic string, key, value []byte) error {
+	return p.PublishWithHeaders(topic, key, value, nil)
+}
+
+// PublishWithHeaders publica uma mensagem em um tópico específico com headers
+func (p *Producer) PublishWithHeaders(topic string, key, value []byte, headers map[string]string) error {
 	msg := &sarama.ProducerMessage{
 		Topic: topic,
 		Key:   sarama.ByteEncoder(key),
 		Value: sarama.ByteEncoder(value),
 	}
 
+	// Adiciona headers se fornecidos
+	if headers != nil {
+		for k, v := range headers {
+			msg.Headers = append(msg.Headers, sarama.RecordHeader{
+				Key:   []byte(k),
+				Value: []byte(v),
+			})
+		}
+	}
+
 	_, _, err := p.producer.SendMessage(msg)
 	return err
+}
+
+// extractOrGenerateCorrelationID extrai o correlationID dos headers ou gera um novo UUID
+func extractOrGenerateCorrelationID(headers []*sarama.RecordHeader) string {
+	for _, header := range headers {
+		if string(header.Key) == "correlationID" || string(header.Key) == "correlation_id" {
+			return string(header.Value)
+		}
+	}
+	// Se não encontrou, gera um novo UUID
+	return uuid.New().String()
 }
 
 // Close fecha o produtor
