@@ -21,16 +21,18 @@ func NewListener(mongoClient *mongodb.Client, cfg *config.Config) *Listener {
 	}
 }
 
-func (l *Listener) HandleMessage(key, value []byte) error {
+func (l *Listener) HandleMessage(key, value []byte, correlationID string) error {
+	log.Printf("[TransactionListener] [CorrelationID: %s] Processando transação confirmada", correlationID)
+
 	var transactionEvent models.TransactionConfirmed
 
 	if err := json.Unmarshal(value, &transactionEvent); err != nil {
-		log.Printf("[TransactionListener] Erro ao fazer unmarshal da mensagem: %v", err)
+		log.Printf("[TransactionListener] [CorrelationID: %s] Erro ao fazer unmarshal da mensagem: %v", correlationID, err)
 		return err
 	}
 
-	log.Printf("[TransactionListener] Processando transação %s para conta %s: tipo=%s, valor=%.2f",
-		transactionEvent.MovimentacaoID, transactionEvent.ContaID, transactionEvent.Tipo, transactionEvent.Valor)
+	log.Printf("[TransactionListener] [CorrelationID: %s] Processando transação %s para conta %s: tipo=%s, valor=%.2f",
+		correlationID, transactionEvent.MovimentacaoID, transactionEvent.ContaID, transactionEvent.Tipo, transactionEvent.Valor)
 
 	// Mapeia para o modelo MongoDB usando movimentacao_id como _id
 	transaction := models.Transaction{
@@ -46,11 +48,11 @@ func (l *Listener) HandleMessage(key, value []byte) error {
 	}
 
 	if err := l.mongoClient.InsertTransaction(transaction); err != nil {
-		log.Printf("[TransactionListener] Erro ao inserir transação no MongoDB: %v", err)
+		log.Printf("[TransactionListener] [CorrelationID: %s] Erro ao inserir transação no MongoDB: %v", correlationID, err)
 		return err
 	}
 
-	log.Printf("[TransactionListener] Transação %s inserida com sucesso", transactionEvent.MovimentacaoID)
+	log.Printf("[TransactionListener] [CorrelationID: %s] Transação %s inserida com sucesso", correlationID, transactionEvent.MovimentacaoID)
 
 	return nil
 }

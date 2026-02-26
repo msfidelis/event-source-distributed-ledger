@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/IBM/sarama"
+	"github.com/google/uuid"
 )
 
 type Consumer struct {
@@ -20,7 +21,7 @@ type ConsumerGroupHandler struct {
 	topic   string
 }
 
-type MessageHandler func(key, value []byte) error
+type MessageHandler func(key, value []byte, correlationID string) error
 
 func NewConsumer(brokers []string, topic, groupID string) *Consumer {
 	return &Consumer{
@@ -56,13 +57,16 @@ func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, 
 
 			msgCount++
 
+			// Extrai ou gera correlationID dos headers
+			correlationID := extractOrGenerateCorrelationID(message.Headers)
+
 			if msgCount <= 10 || msgCount%1000 == 0 {
-				log.Printf("[%s] Mensagem #%d recebida (partition=%d, offset=%d)",
-					h.topic, msgCount, message.Partition, message.Offset)
+				log.Printf("[%s] Mensagem #%d recebida (partition=%d, offset=%d, correlationID=%s)",
+					h.topic, msgCount, message.Partition, message.Offset, correlationID)
 			}
 
-			if err := h.handler(message.Key, message.Value); err != nil {
-				log.Printf("[Kafka] Erro ao processar mensagem offset %d: %v", message.Offset, err)
+			if err := h.handler(message.Key, message.Value, correlationID); err != nil {
+				log.Printf("[Kafka] Erro ao processar mensagem offset %d (correlationID=%s): %v", message.Offset, correlationID, err)
 			}
 
 			session.MarkMessage(message, "")
@@ -131,4 +135,15 @@ func (c *Consumer) Close() error {
 		return c.consumerGroup.Close()
 	}
 	return nil
+}
+
+// extractOrGenerateCorrelationID extrai o correlationID dos headers ou gera um novo UUID
+func extractOrGenerateCorrelationID(headers []*sarama.RecordHeader) string {
+	for _, header := range headers {
+		if string(header.Key) == "correlationID" || string(header.Key) == "correlation_id" {
+			return string(header.Value)
+		}
+	}
+	// Se não encontrou, gera um novo UUID
+	return uuid.New().String()
 }

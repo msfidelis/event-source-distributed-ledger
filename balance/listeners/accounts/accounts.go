@@ -20,25 +20,26 @@ func NewListener(scyllaClient *scylla.Client, cfg *config.Config) *Listener {
 	}
 }
 
-func (l *Listener) HandleMessage(key, value []byte) error {
+func (l *Listener) HandleMessage(key, value []byte, correlationID string) error {
+	log.Printf("[AccountsListener] [CorrelationID: %s] Processando nova conta", correlationID)
 
 	var newAccount models.NewAccount
 
 	if err := json.Unmarshal(value, &newAccount); err != nil {
-		log.Printf("[AccountsListener] Erro ao fazer unmarshal da mensagem: %v", err)
+		log.Printf("[AccountsListener] [CorrelationID: %s] Erro ao fazer unmarshal da mensagem: %v", correlationID, err)
 		return err
 	}
 
 	newAccount.Version = 0 // Versão inicial
 
-	log.Printf("[AccountsListener] Registrando nova conta %s: saldo_inicial=%.2f, version=%d",
-		newAccount.ContaID, newAccount.SaldoInicial, newAccount.Version)
+	log.Printf("[AccountsListener] [CorrelationID: %s] Registrando nova conta %s: saldo_inicial=%.2f, version=%d",
+		correlationID, newAccount.ContaID, newAccount.SaldoInicial, newAccount.Version)
 
 	if err := l.scyllaClient.InsertInitialBalance(newAccount.ContaID, newAccount.SaldoInicial, newAccount.Version); err != nil {
-		log.Printf("[AccountsListener] Erro ao inserir conta no ScyllaDB: %v", err)
+		log.Printf("[AccountsListener] [CorrelationID: %s] Erro ao inserir conta no ScyllaDB: %v", correlationID, err)
 		return err
 	}
 
-	log.Printf("[AccountsListener] Conta registrada com sucesso para conta %s", newAccount.ContaID)
+	log.Printf("[AccountsListener] [CorrelationID: %s] Conta registrada com sucesso para conta %s", correlationID, newAccount.ContaID)
 	return nil
 }

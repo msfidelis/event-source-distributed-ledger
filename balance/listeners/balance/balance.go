@@ -21,23 +21,25 @@ func NewListener(scyllaClient *scylla.Client, cfg *config.Config) *Listener {
 	}
 }
 
-func (l *Listener) HandleMessage(key, value []byte) error {
+func (l *Listener) HandleMessage(key, value []byte, correlationID string) error {
+	log.Printf("[BalanceListener] [CorrelationID: %s] Processando atualização de saldo", correlationID)
+
 	var balanceUpdate models.BalanceUpdated
 
 	if err := json.Unmarshal(value, &balanceUpdate); err != nil {
-		log.Printf("[BalanceListener] Erro ao fazer unmarshal da mensagem: %v", err)
+		log.Printf("[BalanceListener] [CorrelationID: %s] Erro ao fazer unmarshal da mensagem: %v", correlationID, err)
 		return err
 	}
 
-	log.Printf("[BalanceListener] Processando atualização de saldo para conta %s: balance=%.2f, version=%d",
-		balanceUpdate.ContaID, balanceUpdate.Balance, balanceUpdate.Version)
+	log.Printf("[BalanceListener] [CorrelationID: %s] Processando atualização de saldo para conta %s: balance=%.2f, version=%d",
+		correlationID, balanceUpdate.ContaID, balanceUpdate.Balance, balanceUpdate.Version)
 
 	if err := l.scyllaClient.InsertBalance(balanceUpdate.ContaID, balanceUpdate.Balance, balanceUpdate.Version); err != nil {
-		log.Printf("[BalanceListener] Erro ao inserir saldo no ScyllaDB: %v", err)
+		log.Printf("[BalanceListener] [CorrelationID: %s] Erro ao inserir saldo no ScyllaDB: %v", correlationID, err)
 		return err
 	}
 
-	log.Printf("[BalanceListener] Saldo atualizado com sucesso para conta %s", balanceUpdate.ContaID)
+	log.Printf("[BalanceListener] [CorrelationID: %s] Saldo atualizado com sucesso para conta %s", correlationID, balanceUpdate.ContaID)
 
 	return nil
 }
