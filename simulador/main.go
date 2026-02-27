@@ -110,7 +110,8 @@ func criarContas(ctx context.Context, producer *kafka.Producer, cfg *config.Conf
 	}
 
 	for i := 0; i < quantidade; i++ {
-		contaID := contasFixas[i] // Usa UUID fixo
+		contaID := contasFixas[i]            // Usa UUID fixo
+		correlationID := uuid.New().String() // Gera correlationID para esta operação
 
 		evento := events.ContaCriada{
 			ContaID:          contaID,
@@ -126,18 +127,19 @@ func criarContas(ctx context.Context, producer *kafka.Producer, cfg *config.Conf
 			Data:      evento,
 			Timestamp: time.Now(),
 			Metadata: map[string]string{
-				"source":  "producer-simulator",
-				"version": "1.0",
+				"source":        "producer-simulator",
+				"version":       "1.0",
+				"correlationID": correlationID,
 			},
 		}
 
-		if err := producer.Publish(ctx, contaID.String(), envelope); err != nil {
-			log.Printf("Erro ao criar conta: %v", err)
+		if err := producer.PublishWithCorrelationID(ctx, contaID.String(), envelope, correlationID); err != nil {
+			log.Printf("[CorrelationID: %s] Erro ao criar conta: %v", correlationID, err)
 			continue
 		}
 
-		log.Printf("Conta criada: %s - %s (Saldo: R$ %.2f)",
-			contaID, evento.NomeProprietario, evento.SaldoInicial)
+		log.Printf("[CorrelationID: %s] Conta criada: %s - %s (Saldo: R$ %.2f)",
+			correlationID, contaID, evento.NomeProprietario, evento.SaldoInicial)
 	}
 
 	return contasFixas[:quantidade] // Retorna as contas criadas
@@ -238,6 +240,7 @@ func continuousWorker(ctx context.Context, id int, producer *kafka.Producer, con
 
 func gerarMovimentacao(ctx context.Context, workerID int, producer *kafka.Producer, contas []uuid.UUID, cfg *config.Config) error {
 	contaID := contas[rand.Intn(len(contas))]
+	correlationID := uuid.New().String() // Gera correlationID para esta transação
 
 	// Usa probabilidade configurável para crédito
 	isCredito := rand.Float64() < cfg.Simulation.CreditoProbability
@@ -281,13 +284,14 @@ func gerarMovimentacao(ctx context.Context, workerID int, producer *kafka.Produc
 		Data:      evento,
 		Timestamp: time.Now(),
 		Metadata: map[string]string{
-			"source":  "producer-simulator",
-			"version": "1.0",
-			"worker":  fmt.Sprintf("worker-%d", workerID),
+			"source":        "producer-simulator",
+			"version":       "1.0",
+			"worker":        fmt.Sprintf("worker-%d", workerID),
+			"correlationID": correlationID,
 		},
 	}
 
-	return producer.Publish(ctx, contaID.String(), envelope)
+	return producer.PublishWithCorrelationID(ctx, contaID.String(), envelope, correlationID)
 }
 
 func randomFloat(min, max float64) float64 {
