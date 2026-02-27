@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 
 	"ledger/internal/models"
 	"ledger/pkg/config"
 	"ledger/pkg/events"
 	"ledger/pkg/kafka"
+	"ledger/pkg/logger"
 	"ledger/pkg/metrics"
 
 	"github.com/google/uuid"
@@ -43,12 +43,19 @@ func NewListener(db *bun.DB, cfg *config.Config) (*Listener, error) {
 func (l *Listener) StartConsuming(ctx context.Context) error {
 	topic := l.config.Kafka.TopicContaCriada
 	groupID := l.config.Kafka.GroupAccountListener
+	logger := logger.Instance()
 
-	log.Printf("[Account] Iniciando listener para tópico: %s (group: %s)", topic, groupID)
+	logger.Info().
+		Str("topic", topic).
+		Str("group_id", groupID).
+		Msg("Iniciando listener de conta criada")
 
 	consumer := kafka.NewConsumer(l.config.Kafka.Brokers, topic, groupID)
 	defer func() {
-		log.Printf("[Account] Fechando consumer do tópico: %s", topic)
+		logger.Info().
+			Str("topic", topic).
+			Str("group_id", groupID).
+			Msg("Fechando consumer do tópico")
 		consumer.Close()
 		l.producer.Close()
 	}()
@@ -61,13 +68,19 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	startTime := time.Now()
 	eventType := events.EventTypeContaCriada
 	listener := "account"
+	logger := logger.Instance()
 
-	log.Printf("[Account] [CorrelationID: %s] Processando evento de conta criada", correlationID)
+	logger.Info().
+		Str("correlation_id", correlationID).
+		Msg("Processando evento de conta criada")
 
 	var envelope events.EventEnvelope
 	if err := json.Unmarshal(value, &envelope); err != nil {
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "unmarshal_error").Inc()
-		log.Printf("[Account] [CorrelationID: %s] Erro ao deserializar envelope: %v", correlationID, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao deserializar envelope")
 		return fmt.Errorf("erro ao deserializar envelope: %w", err)
 	}
 
@@ -75,20 +88,29 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	dataBytes, err := json.Marshal(envelope.Data)
 	if err != nil {
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "marshal_error").Inc()
-		log.Printf("[Account] [CorrelationID: %s] Erro ao serializar data: %v", correlationID, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao serializar data")
 		return fmt.Errorf("erro ao serializar data: %w", err)
 	}
 
 	var contaCriada events.ContaCriada
 	if err := json.Unmarshal(dataBytes, &contaCriada); err != nil {
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "unmarshal_data_error").Inc()
-		log.Printf("[Account] [CorrelationID: %s] Erro ao deserializar ContaCriada: %v", correlationID, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao deserializar ContaCriada")
 		return fmt.Errorf("erro ao deserializar ContaCriada: %w", err)
 	}
 
 	// PRIMEIRO: Cria registro na tabela accounts (para satisfazer FK da tabela events)
 	if err := l.createAccount(contaCriada, correlationID); err != nil {
-		log.Printf("[Account] [CorrelationID: %s] Erro ao criar conta: %v", correlationID, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao criar conta")
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "create_account_error").Inc()
 		return fmt.Errorf("erro ao criar conta: %w", err)
 	}
@@ -104,16 +126,27 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	)
 	if err != nil {
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "save_event_error").Inc()
-		log.Printf("[Account] [CorrelationID: %s] Erro ao salvar evento: %v", correlationID, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao salvar evento")
 		return fmt.Errorf("erro ao salvar evento: %w", err)
 	}
 
-	log.Printf("[Account] [CorrelationID: %s] Evento persistido: ContaCriada - ID=%d, Conta=%s (%s) - R$ %.2f",
-		correlationID, eventID, contaCriada.ContaID, contaCriada.NomeProprietario, contaCriada.SaldoInicial)
+	logger.Info().
+		Str("correlation_id", correlationID).
+		Int64("event_id", eventID).
+		Str("conta_id", contaCriada.ContaID.String()).
+		Str("nome_proprietario", contaCriada.NomeProprietario).
+		Float64("saldo_inicial", contaCriada.SaldoInicial).
+		Msg("Evento persistido: ContaCriada")
 
 	// TERCEIRO: Publica confirmação no tópico de confirmações
 	if err := l.publishConfirmation(contaCriada, eventID, correlationID); err != nil {
-		log.Printf("[Account] [CorrelationID: %s] Erro ao publicar confirmação: %v", correlationID, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao publicar confirmação")
 		// Não retorna erro para não bloquear o consumer
 	}
 
@@ -122,7 +155,9 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	metrics.EventsProcessingDuration.WithLabelValues(eventType, listener).Observe(time.Since(startTime).Seconds())
 	metrics.AccountsCreatedTotal.Inc()
 
-	log.Printf("[Account] [CorrelationID: %s] Processamento concluído com sucesso", correlationID)
+	logger.Info().
+		Str("correlation_id", correlationID).
+		Msg("Processamento concluído com sucesso")
 
 	return nil
 }
@@ -130,6 +165,7 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 func (l *Listener) saveEvent(aggregateID uuid.UUID, aggregateType, eventType string, eventData []byte, metadata map[string]string, correlationID string) (int64, error) {
 	startTime := time.Now()
 	ctx := context.Background()
+	logger := logger.Instance()
 
 	// Adiciona correlationID ao metadata
 	if metadata == nil {
@@ -146,7 +182,10 @@ func (l *Listener) saveEvent(aggregateID uuid.UUID, aggregateType, eventType str
 		Scan(ctx, &version)
 	if err != nil {
 		metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
-		log.Printf("[Account] [CorrelationID: %s] Erro ao obter versão: %v", correlationID, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao obter versão")
 		return 0, fmt.Errorf("erro ao obter versão: %w", err)
 	}
 
@@ -154,7 +193,10 @@ func (l *Listener) saveEvent(aggregateID uuid.UUID, aggregateType, eventType str
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
-		log.Printf("[Account] [CorrelationID: %s] Erro ao serializar metadata: %v", correlationID, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao serializar metadata")
 		return 0, fmt.Errorf("erro ao serializar metadata: %w", err)
 	}
 
@@ -177,11 +219,17 @@ func (l *Listener) saveEvent(aggregateID uuid.UUID, aggregateType, eventType str
 	if err != nil {
 		// Detecta conflitos de versão (optimistic locking)
 		if isVersionConflict(err) {
-			log.Printf("[Account] [CorrelationID: %s] Version conflict: %v", correlationID, aggregateID)
+			logger.Warn().
+				Str("correlation_id", correlationID).
+				Str("aggregate_id", aggregateID.String()).
+				Msg("Version conflict")
 			metrics.EventsVersionConflictsTotal.WithLabelValues(aggregateType).Inc()
 			metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "version_conflict").Inc()
 		} else {
-			log.Printf("[Account] [CorrelationID: %s] Erro ao inserir evento: %v", correlationID, err)
+			logger.Error().
+				Str("correlation_id", correlationID).
+				Err(err).
+				Msg("Erro ao inserir evento")
 			metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
 		}
 		return 0, err
@@ -203,6 +251,7 @@ func isVersionConflict(err error) bool {
 
 func (l *Listener) createAccount(conta events.ContaCriada, correlationID string) error {
 	ctx := context.Background()
+	logger := logger.Instance()
 
 	account := &models.Account{
 		AggregateID: conta.ContaID,
@@ -222,16 +271,26 @@ func (l *Listener) createAccount(conta events.ContaCriada, correlationID string)
 		Exec(ctx)
 
 	if err != nil {
-		log.Printf("[Account] [CorrelationID: %s] Erro ao inserir conta: %v", correlationID, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao inserir conta")
 		return fmt.Errorf("erro ao inserir conta: %w", err)
 	}
 
-	log.Printf("[Account] [CorrelationID: %s] Conta criada na tabela accounts: %s - %s - Saldo: R$ %.2f",
-		correlationID, conta.ContaID, conta.NomeProprietario, conta.SaldoInicial)
+	logger.Info().
+		Str("correlation_id", correlationID).
+		Str("conta_id", conta.ContaID.String()).
+		Str("nome_proprietario", conta.NomeProprietario).
+		Float64("saldo_inicial", conta.SaldoInicial).
+		Msg("Conta criada na tabela accounts")
 
 	// Publica evento de saldo atualizado
 	if err := l.publishBalanceUpdate(conta.ContaID, conta.SaldoInicial, 1, correlationID); err != nil {
-		log.Printf("[Account] [CorrelationID: %s] Erro ao publicar saldo atualizado: %v", correlationID, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao publicar saldo atualizado")
 	}
 
 	return nil
@@ -252,7 +311,11 @@ func (l *Listener) publishConfirmation(conta events.ContaCriada, eventID int64, 
 
 	confirmationJSON, err := json.Marshal(confirmation)
 	if err != nil {
-		log.Printf("[Account] [CorrelationID: %s] Erro ao serializar confirmação: %v", correlationID, err)
+		logger := logger.Instance()
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao serializar confirmação")
 		return fmt.Errorf("erro ao serializar confirmação: %w", err)
 	}
 
@@ -262,16 +325,28 @@ func (l *Listener) publishConfirmation(conta events.ContaCriada, eventID int64, 
 	}
 	// Publica no tópico de confirmações com headers
 	if err := l.producer.PublishWithHeaders(topic, []byte(conta.ContaID.String()), confirmationJSON, headers); err != nil {
-		log.Printf("[Account] [CorrelationID: %s] Erro ao publicar no tópico %s: %v", correlationID, topic, err)
+		logger := logger.Instance()
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msgf("Erro ao publicar no tópico %s", topic)
 		return fmt.Errorf("erro ao publicar no tópico %s: %w", topic, err)
 	}
 
-	log.Printf("[Account] [CorrelationID: %s] Confirmação publicada no tópico %s: conta_id=%s, event_id=%d",
-		correlationID, topic, conta.ContaID, eventID)
+	logger := logger.Instance()
+	logger.Info().
+		Str("correlation_id", correlationID).
+		Str("conta_id", conta.ContaID.String()).
+		Int64("event_id", eventID).
+		Str("topic", topic).
+		Msg("Confirmação publicada no tópico")
 	return nil
 }
 
 func (l *Listener) publishBalanceUpdate(contaID uuid.UUID, balance float64, version int, correlationID string) error {
+
+	logger := logger.Instance()
+
 	// Cria mensagem de saldo atualizado
 	balanceUpdate := map[string]interface{}{
 		"conta_id":  contaID,
@@ -282,7 +357,10 @@ func (l *Listener) publishBalanceUpdate(contaID uuid.UUID, balance float64, vers
 
 	balanceJSON, err := json.Marshal(balanceUpdate)
 	if err != nil {
-		log.Printf("[Account] [CorrelationID: %s] Erro ao serializar saldo atualizado: %v", correlationID, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msg("Erro ao serializar saldo atualizado")
 		return fmt.Errorf("erro ao serializar saldo atualizado: %w", err)
 	}
 
@@ -292,12 +370,20 @@ func (l *Listener) publishBalanceUpdate(contaID uuid.UUID, balance float64, vers
 	}
 	// Publica no tópico de saldo atualizado com headers
 	if err := l.producer.PublishWithHeaders(topic, []byte(contaID.String()), balanceJSON, headers); err != nil {
-		log.Printf("[Account] [CorrelationID: %s] Erro ao publicar no tópico %s: %v", correlationID, topic, err)
+		logger.Error().
+			Str("correlation_id", correlationID).
+			Err(err).
+			Msgf("Erro ao publicar no tópico %s", topic)
 		return fmt.Errorf("erro ao publicar no tópico %s: %w", topic, err)
 	}
 
-	log.Printf("[Account] [CorrelationID: %s] Saldo atualizado publicado: conta_id=%s, balance=%.2f, version=%d",
-		correlationID, contaID, balance, version)
+	logger.Info().
+		Str("correlation_id", correlationID).
+		Str("conta_id", contaID.String()).
+		Float64("balance", balance).
+		Int("version", version).
+		Str("topic", topic).
+		Msg("Saldo atualizado publicado no tópico")
 
 	return nil
 }

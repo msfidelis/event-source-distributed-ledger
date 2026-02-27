@@ -3,7 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"log"
+	"ledger/pkg/logger"
 	"os"
 	"sync"
 
@@ -25,16 +25,23 @@ var BunInstance *bun.DB
 func GetDBConn() *sql.DB {
 	onceDB.Do(func() {
 		var err error
+		logger := logger.Instance()
 		connectionString := getDBUrl()
 		dbInstance, err = sql.Open("postgres", connectionString)
 		if err != nil {
-			log.Fatalf("Erro ao conectar com o banco de dados: %v", err)
+			logger.Error().
+				Err(err).
+				Str("connection_string", connectionString).
+				Msg("Erro ao abrir conexão com o banco de dados")
 		}
 
 		// Verifica a conexão
 		err = dbInstance.Ping()
 		if err != nil {
-			log.Fatalf("Erro ao estabelecer uma conexão com o banco de dados: %v", err)
+			logger.Error().
+				Err(err).
+				Str("connection_string", connectionString).
+				Msg("Erro ao estabelecer uma conexão com o banco de dados")
 		}
 	})
 	return dbInstance

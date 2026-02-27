@@ -283,8 +283,8 @@ services:
 
       # Simulation Configuration
       SIM_NUM_CONTAS: 15
-      SIM_CONTINUOUS_MODE: false
-      SIM_NUM_MOVIMENTACOES: 1
+      SIM_CONTINUOUS_MODE: true
+      SIM_NUM_MOVIMENTACOES: 100
       SIM_NUM_WORKERS: 1
       SIM_EVENTS_PER_WORKER: 1
       SIM_SLEEP_BETWEEN_EVENTS: 2500ms

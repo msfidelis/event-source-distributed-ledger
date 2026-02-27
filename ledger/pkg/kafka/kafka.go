@@ -2,7 +2,7 @@ package kafka
 
 import (
 	"context"
-	"log"
+	"ledger/pkg/logger"
 	"strings"
 
 	"github.com/IBM/sarama"
@@ -42,19 +42,23 @@ func ParseBrokers(brokers string) []string {
 
 // Setup é executado no início de uma nova sessão, antes de ConsumeClaim
 func (h ConsumerGroupHandler) Setup(sarama.ConsumerGroupSession) error {
-	log.Printf("[Kafka] Consumer group session iniciada para tópico: %s", h.topic)
+	logger := logger.Instance()
+	logger.Info().Str("topic", h.topic).Msg("Consumer group session iniciada")
 	return nil
 }
 
 // Cleanup é executado no final da sessão, depois de todos os ConsumeClaim
 func (h ConsumerGroupHandler) Cleanup(sarama.ConsumerGroupSession) error {
-	log.Printf("[Kafka] Consumer group session finalizada para tópico: %s", h.topic)
+	logger := logger.Instance()
+	logger.Info().Str("topic", h.topic).Msg("Consumer group session finalizada")
 	return nil
 }
 
 // ConsumeClaim processa mensagens de uma partição específica
 func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	msgCount := 0
+
+	logger := logger.Instance()
 
 	for {
 		select {
@@ -70,13 +74,23 @@ func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, 
 
 			// Log das primeiras 10 mensagens e depois a cada 1000
 			if msgCount <= 10 || msgCount%1000 == 0 {
-				log.Printf("[%s] Mensagem #%d recebida (partition=%d, offset=%d, correlationID=%s)",
-					h.topic, msgCount, message.Partition, message.Offset, correlationID)
+
+				logger.Info().
+					Str("topic", h.topic).
+					Int("message_count", msgCount).
+					Int32("partition", message.Partition).
+					Int64("offset", message.Offset).
+					Str("correlation_id", correlationID).
+					Msg("Mensagem recebida")
 			}
 
 			// Processa a mensagem com correlationID
 			if err := h.handler(message.Key, message.Value, correlationID); err != nil {
-				log.Printf("[Kafka] Erro ao processar mensagem offset %d (correlationID=%s): %v", message.Offset, correlationID, err)
+				logger.Error().
+					Err(err).
+					Int64("offset", message.Offset).
+					Str("correlation_id", correlationID).
+					Msg("Erro ao processar o evento")
 				// Mesmo com erro, marca a mensagem como processada para não travar o consumer
 			}
 
@@ -91,6 +105,7 @@ func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, 
 
 // Consume inicia o consumo de mensagens do tópico
 func (c *Consumer) Consume(ctx context.Context, handler MessageHandler) error {
+	logger := logger.Instance()
 	config := sarama.NewConfig()
 
 	// Configurações de consumer
@@ -111,8 +126,11 @@ func (c *Consumer) Consume(ctx context.Context, handler MessageHandler) error {
 	config.Version = sarama.V2_6_0_0
 	config.ClientID = c.groupID
 
-	log.Printf("[Kafka] Conectando aos brokers: %v", c.brokers)
-	log.Printf("[Kafka] Topic: %s, GroupID: %s", c.topic, c.groupID)
+	logger.Info().
+		Strs("brokers", c.brokers).
+		Str("topic", c.topic).
+		Str("group_id", c.groupID).
+		Msg("Conectando aos brokers")
 
 	// Cria o consumer group
 	consumerGroup, err := sarama.NewConsumerGroup(c.brokers, c.groupID, config)
@@ -131,25 +149,25 @@ func (c *Consumer) Consume(ctx context.Context, handler MessageHandler) error {
 	go func() {
 		for err := range consumerGroup.Errors() {
 			if err != nil {
-				log.Printf("[Kafka] Erro no consumer group: %v", err)
+				logger.Error().Err(err).Msg("Erro no consumer group")
 			}
 		}
 	}()
 
 	// Loop principal do consumer
-	log.Printf("[Kafka] Iniciando consumo de mensagens do tópico: %s", c.topic)
+	logger.Info().Str("topic", c.topic).Msg("Iniciando consumo de mensagens do tópico")
 
 	for {
 		// Consome do tópico
 		topics := []string{c.topic}
 		if err := consumerGroup.Consume(ctx, topics, groupHandler); err != nil {
-			log.Printf("[Kafka] Erro ao consumir: %v", err)
+			logger.Error().Err(err).Msg("Erro ao consumir mensagens")
 			return err
 		}
 
 		// Se o context foi cancelado, sai do loop
 		if ctx.Err() != nil {
-			log.Printf("[Kafka] Consumer cancelado para tópico: %s", c.topic)
+			logger.Info().Str("topic", c.topic).Msg("Consumer cancelado")
 			return nil
 		}
 	}
@@ -158,7 +176,8 @@ func (c *Consumer) Consume(ctx context.Context, handler MessageHandler) error {
 // Close fecha o consumer
 func (c *Consumer) Close() error {
 	if c.consumerGroup != nil {
-		log.Printf("[Kafka] Fechando consumer para tópico: %s", c.topic)
+		logger := logger.Instance()
+		logger.Info().Str("topic", c.topic).Msg("Fechando consumer")
 		return c.consumerGroup.Close()
 	}
 	return nil
@@ -171,6 +190,9 @@ type Producer struct {
 
 // NewProducer cria um novo produtor Kafka
 func NewProducer(brokers []string) (*Producer, error) {
+
+	logger := logger.Instance()
+
 	config := sarama.NewConfig()
 	config.Producer.RequiredAcks = sarama.WaitForLocal // Aguarda confirmação do líder
 	config.Producer.Compression = sarama.CompressionSnappy
@@ -182,7 +204,7 @@ func NewProducer(brokers []string) (*Producer, error) {
 		return nil, err
 	}
 
-	log.Printf("[Kafka] Produtor criado para brokers: %v", brokers)
+	logger.Info().Strs("brokers", brokers).Msg("Produtor criado")
 
 	return &Producer{
 		producer: producer,
@@ -230,7 +252,8 @@ func extractOrGenerateCorrelationID(headers []*sarama.RecordHeader) string {
 // Close fecha o produtor
 func (p *Producer) Close() error {
 	if p.producer != nil {
-		log.Printf("[Kafka] Fechando produtor")
+		logger := logger.Instance()
+		logger.Info().Msg("Fechando produtor")
 		return p.producer.Close()
 	}
 	return nil
