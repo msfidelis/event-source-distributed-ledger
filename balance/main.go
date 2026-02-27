@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,11 +10,13 @@ import (
 	"balance/listeners/balance"
 	"balance/pkg/config"
 	"balance/pkg/kafka"
+	"balance/pkg/logger"
 	"balance/pkg/scylla"
 )
 
 func main() {
-	log.Println("Iniciando Balance Ingestion Service...")
+	log := logger.Instance()
+	log.Info().Msg("Iniciando Balance Ingestion Service...")
 
 	// Carrega configurações
 	cfg := config.Load()
@@ -23,13 +24,13 @@ func main() {
 	// Conecta ao ScyllaDB
 	scyllaClient, err := scylla.NewClient(cfg.Scylla.Hosts)
 	if err != nil {
-		log.Fatalf("Erro ao conectar ao ScyllaDB: %v", err)
+		log.Fatal().Err(err).Msg("Erro ao conectar ao ScyllaDB")
 	}
 	defer scyllaClient.Close()
 
 	// Inicializa o schema do ScyllaDB
 	if err := scyllaClient.InitSchema(); err != nil {
-		log.Fatalf("Erro ao inicializar schema do ScyllaDB: %v", err)
+		log.Fatal().Err(err).Msg("Erro ao inicializar schema do ScyllaDB")
 	}
 
 	// Context com cancelamento via sinal
@@ -41,7 +42,7 @@ func main() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
-		log.Println("Sinal de interrupção recebido, encerrando...")
+		log.Info().Msg("Sinal de interrupção recebido, encerrando...")
 		cancel()
 	}()
 
@@ -69,7 +70,7 @@ func main() {
 
 	// Inicia consumer de saldos em goroutine
 	go func() {
-		log.Printf("Iniciando consumo de mensagens do tópico %s...", cfg.Kafka.TopicSaldoAtualizado)
+		log.Info().Str("topic", cfg.Kafka.TopicSaldoAtualizado).Msg("Iniciando consumo de mensagens")
 		if err := balanceConsumer.Consume(ctx, balanceListener.HandleMessage); err != nil {
 			if err != context.Canceled {
 				errChan <- err
@@ -79,7 +80,7 @@ func main() {
 
 	// Inicia consumer de contas em goroutine
 	go func() {
-		log.Printf("Iniciando consumo de mensagens do tópico %s...", cfg.Kafka.TopicNovaContaRegistrada)
+		log.Info().Str("topic", cfg.Kafka.TopicNovaContaRegistrada).Msg("Iniciando consumo de mensagens")
 		if err := accountsConsumer.Consume(ctx, accountsListener.HandleMessage); err != nil {
 			if err != context.Canceled {
 				errChan <- err
@@ -90,8 +91,8 @@ func main() {
 	// Aguarda erro ou cancelamento
 	select {
 	case err := <-errChan:
-		log.Fatalf("Erro em um dos consumers: %v", err)
+		log.Fatal().Err(err).Msg("Consumer error")
 	case <-ctx.Done():
-		log.Println("Balance Ingestion Service encerrado")
+		log.Info().Msg("Balance Ingestion Service encerrado")
 	}
 }

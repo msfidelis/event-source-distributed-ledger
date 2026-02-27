@@ -3,9 +3,9 @@ package accounts
 import (
 	"balance/internal/models"
 	"balance/pkg/config"
+	"balance/pkg/logger"
 	"balance/pkg/scylla"
 	"encoding/json"
-	"log"
 )
 
 type Listener struct {
@@ -21,25 +21,38 @@ func NewListener(scyllaClient *scylla.Client, cfg *config.Config) *Listener {
 }
 
 func (l *Listener) HandleMessage(key, value []byte, correlationID string) error {
-	log.Printf("[AccountsListener] [CorrelationID: %s] Processando nova conta", correlationID)
+
+	log := logger.Instance()
+	log.Info().Str("correlation_id", correlationID).Msg("Processando nova conta")
 
 	var newAccount models.NewAccount
 
 	if err := json.Unmarshal(value, &newAccount); err != nil {
-		log.Printf("[AccountsListener] [CorrelationID: %s] Erro ao fazer unmarshal da mensagem: %v", correlationID, err)
+		log.Error().Str("correlation_id", correlationID).Err(err).Msg("Erro ao fazer unmarshal da mensagem")
 		return err
 	}
 
 	newAccount.Version = 0 // Versão inicial
 
-	log.Printf("[AccountsListener] [CorrelationID: %s] Registrando nova conta %s: saldo_inicial=%.2f, version=%d",
-		correlationID, newAccount.ContaID, newAccount.SaldoInicial, newAccount.Version)
+	log.Info().
+		Str("correlation_id", correlationID).
+		Str("conta_id", newAccount.ContaID.String()).
+		Float64("saldo_inicial", newAccount.SaldoInicial).
+		Int("version", newAccount.Version).
+		Msg("Registrando nova conta")
 
 	if err := l.scyllaClient.InsertInitialBalance(newAccount.ContaID, newAccount.SaldoInicial, newAccount.Version); err != nil {
-		log.Printf("[AccountsListener] [CorrelationID: %s] Erro ao inserir conta no ScyllaDB: %v", correlationID, err)
+		log.Error().
+			Str("correlation_id", correlationID).
+			Str("conta_id", newAccount.ContaID.String()).
+			Err(err).
+			Msg("Erro ao inserir conta no ScyllaDB")
 		return err
 	}
 
-	log.Printf("[AccountsListener] [CorrelationID: %s] Conta registrada com sucesso para conta %s", correlationID, newAccount.ContaID)
+	log.Info().
+		Str("correlation_id", correlationID).
+		Str("conta_id", newAccount.ContaID.String()).
+		Msg("Conta registrada com sucesso")
 	return nil
 }

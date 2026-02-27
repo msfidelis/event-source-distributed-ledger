@@ -2,10 +2,10 @@ package transaction
 
 import (
 	"encoding/json"
-	"log"
 
 	"statement/internal/models"
 	"statement/pkg/config"
+	"statement/pkg/logger"
 	"statement/pkg/mongodb"
 )
 
@@ -22,17 +22,23 @@ func NewListener(mongoClient *mongodb.Client, cfg *config.Config) *Listener {
 }
 
 func (l *Listener) HandleMessage(key, value []byte, correlationID string) error {
-	log.Printf("[TransactionListener] [CorrelationID: %s] Processando transação confirmada", correlationID)
+	log := logger.Instance()
+	log.Info().Str("correlation_id", correlationID).Msg("Processando transação confirmada")
 
 	var transactionEvent models.TransactionConfirmed
 
 	if err := json.Unmarshal(value, &transactionEvent); err != nil {
-		log.Printf("[TransactionListener] [CorrelationID: %s] Erro ao fazer unmarshal da mensagem: %v", correlationID, err)
+		log.Error().Err(err).Str("correlation_id", correlationID).Msg("Erro ao fazer unmarshal da mensagem")
 		return err
 	}
 
-	log.Printf("[TransactionListener] [CorrelationID: %s] Processando transação %s para conta %s: tipo=%s, valor=%.2f",
-		correlationID, transactionEvent.MovimentacaoID, transactionEvent.ContaID, transactionEvent.Tipo, transactionEvent.Valor)
+	log.Info().
+		Str("correlation_id", correlationID).
+		Str("transaction_id", transactionEvent.MovimentacaoID).
+		Str("account_id", transactionEvent.ContaID).
+		Str("type", transactionEvent.Tipo).
+		Float64("amount", transactionEvent.Valor).
+		Msg("Processando transação")
 
 	// Mapeia para o modelo MongoDB usando movimentacao_id como _id
 	transaction := models.Transaction{
@@ -48,11 +54,14 @@ func (l *Listener) HandleMessage(key, value []byte, correlationID string) error 
 	}
 
 	if err := l.mongoClient.InsertTransaction(transaction); err != nil {
-		log.Printf("[TransactionListener] [CorrelationID: %s] Erro ao inserir transação no MongoDB: %v", correlationID, err)
+		log.Error().Err(err).Str("correlation_id", correlationID).Msg("Erro ao inserir transação no MongoDB")
 		return err
 	}
 
-	log.Printf("[TransactionListener] [CorrelationID: %s] Transação %s inserida com sucesso", correlationID, transactionEvent.MovimentacaoID)
+	log.Info().
+		Str("correlation_id", correlationID).
+		Str("transaction_id", transactionEvent.MovimentacaoID).
+		Msg("Transação inserida com sucesso")
 
 	return nil
 }

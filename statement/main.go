@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,23 +9,25 @@ import (
 	"statement/listeners/transaction"
 	"statement/pkg/config"
 	"statement/pkg/kafka"
+	"statement/pkg/logger"
 	"statement/pkg/mongodb"
 )
 
 func main() {
-	log.Println("Iniciando Statement Ingestion Service...")
+	log := logger.Instance()
+	log.Info().Msg("Iniciando Statement Ingestion Service...")
 
 	// Carrega configurações
 	cfg := config.Load()
 
 	mongoClient, err := mongodb.NewClient(cfg)
 	if err != nil {
-		log.Fatalf("Erro ao conectar ao MongoDB: %v", err)
+		log.Fatal().Err(err).Msg("Erro ao conectar ao MongoDB")
 	}
 	defer mongoClient.Close()
 
 	if err := mongoClient.InitIndexes(); err != nil {
-		log.Fatalf("Erro ao inicializar índices do MongoDB: %v", err)
+		log.Fatal().Err(err).Msg("Erro ao inicializar índices do MongoDB")
 	}
 
 	transactionListener := transaction.NewListener(mongoClient, cfg)
@@ -45,16 +46,16 @@ func main() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
-		log.Println("Sinal de interrupção recebido, encerrando...")
+		log.Info().Msg("Sinal de interrupção recebido, encerrando...")
 		cancel()
 	}()
 
-	log.Printf("Iniciando consumo de mensagens do tópico %s...", cfg.Kafka.TopicTransactionConfirmed)
+	log.Info().Msgf("Iniciando consumo de mensagens do tópico %s...", cfg.Kafka.TopicTransactionConfirmed)
 	if err := consumer.Consume(ctx, transactionListener.HandleMessage); err != nil {
 		if err != context.Canceled {
-			log.Fatalf("Erro ao consumir mensagens: %v", err)
+			log.Fatal().Err(err).Msg("Erro ao consumir mensagens")
 		}
 	}
 
-	log.Println("Statement Ingestion Service encerrado")
+	log.Info().Msg("Statement Ingestion Service encerrado")
 }
