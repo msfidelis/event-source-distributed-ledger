@@ -2,10 +2,11 @@ package kafka
 
 import (
 	"context"
-	"log"
+	"statement/pkg/logger"
 	"strings"
 
 	"github.com/IBM/sarama"
+	"github.com/google/uuid"
 )
 
 type Consumer struct {
@@ -20,7 +21,7 @@ type ConsumerGroupHandler struct {
 	topic   string
 }
 
-type MessageHandler func(key, value []byte) error
+type MessageHandler func(key, value []byte, correlationID string) error
 
 func NewConsumer(brokers []string, topic, groupID string) *Consumer {
 	return &Consumer{
@@ -35,18 +36,20 @@ func ParseBrokers(brokers string) []string {
 }
 
 func (h ConsumerGroupHandler) Setup(sarama.ConsumerGroupSession) error {
-	log.Printf("[Kafka] Consumer group session iniciada para tópico: %s", h.topic)
+	log := logger.Instance()
+	log.Info().Str("topic", h.topic).Msg("Consumer group session iniciada")
 	return nil
 }
 
 func (h ConsumerGroupHandler) Cleanup(sarama.ConsumerGroupSession) error {
-	log.Printf("[Kafka] Consumer group session finalizada para tópico: %s", h.topic)
+	log := logger.Instance()
+	log.Info().Str("topic", h.topic).Msg("Consumer group session finalizada")
 	return nil
 }
 
 func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	msgCount := 0
-
+	log := logger.Instance()
 	for {
 		select {
 		case message := <-claim.Messages():
@@ -56,13 +59,25 @@ func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, 
 
 			msgCount++
 
+			// Extrai ou gera correlationID dos headers
+			correlationID := extractOrGenerateCorrelationID(message.Headers)
+
 			if msgCount <= 10 || msgCount%1000 == 0 {
-				log.Printf("[%s] Mensagem #%d recebida (partition=%d, offset=%d)",
-					h.topic, msgCount, message.Partition, message.Offset)
+				log.Info().
+					Str("topic", h.topic).
+					Int("msgCount", msgCount).
+					Int32("partition", message.Partition).
+					Int64("offset", message.Offset).
+					Str("correlationID", correlationID).
+					Msg("Mensagem recebida")
 			}
 
-			if err := h.handler(message.Key, message.Value); err != nil {
-				log.Printf("[Kafka] Erro ao processar mensagem offset %d: %v", message.Offset, err)
+			if err := h.handler(message.Key, message.Value, correlationID); err != nil {
+				log.Error().
+					Int64("offset", message.Offset).
+					Str("correlationID", correlationID).
+					Err(err).
+					Msg("Erro ao processar mensagem")
 			}
 
 			session.MarkMessage(message, "")
@@ -76,6 +91,8 @@ func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, 
 func (c *Consumer) Consume(ctx context.Context, handler MessageHandler) error {
 	config := sarama.NewConfig()
 
+	log := logger.Instance()
+
 	config.Consumer.Return.Errors = true
 	config.Consumer.Offsets.Initial = sarama.OffsetOldest
 	config.Consumer.Group.Rebalance.Strategy = sarama.NewBalanceStrategyRoundRobin()
@@ -87,8 +104,8 @@ func (c *Consumer) Consume(ctx context.Context, handler MessageHandler) error {
 	config.Version = sarama.V2_6_0_0
 	config.ClientID = c.groupID
 
-	log.Printf("[Kafka] Conectando aos brokers: %v", c.brokers)
-	log.Printf("[Kafka] Topic: %s, GroupID: %s", c.topic, c.groupID)
+	log.Info().Strs("brokers", c.brokers).Msg("[Kafka] Conectando aos brokers")
+	log.Info().Str("topic", c.topic).Str("groupID", c.groupID).Msg("Configuração do consumidor")
 
 	consumerGroup, err := sarama.NewConsumerGroup(c.brokers, c.groupID, config)
 	if err != nil {
@@ -104,22 +121,22 @@ func (c *Consumer) Consume(ctx context.Context, handler MessageHandler) error {
 	go func() {
 		for err := range consumerGroup.Errors() {
 			if err != nil {
-				log.Printf("[Kafka] Erro no consumer group: %v", err)
+				log.Error().Err(err).Msg("Erro no consumer group")
 			}
 		}
 	}()
 
-	log.Printf("[Kafka] Iniciando consumo de mensagens do tópico: %s", c.topic)
+	log.Info().Str("topic", c.topic).Msg("Iniciando consumo de mensagens")
 
 	for {
 		topics := []string{c.topic}
 		if err := consumerGroup.Consume(ctx, topics, groupHandler); err != nil {
-			log.Printf("[Kafka] Erro ao consumir: %v", err)
+			log.Error().Err(err).Msg("Erro ao consumir")
 			return err
 		}
 
 		if ctx.Err() != nil {
-			log.Printf("[Kafka] Consumer cancelado para tópico: %s", c.topic)
+			log.Info().Str("topic", c.topic).Msg("Consumer cancelado")
 			return nil
 		}
 	}
@@ -127,8 +144,20 @@ func (c *Consumer) Consume(ctx context.Context, handler MessageHandler) error {
 
 func (c *Consumer) Close() error {
 	if c.consumerGroup != nil {
-		log.Printf("[Kafka] Fechando consumer para tópico: %s", c.topic)
+		log := logger.Instance()
+		log.Info().Str("topic", c.topic).Msg("Fechando consumer")
 		return c.consumerGroup.Close()
 	}
 	return nil
+}
+
+// extractOrGenerateCorrelationID extrai o correlationID dos headers ou gera um novo UUID
+func extractOrGenerateCorrelationID(headers []*sarama.RecordHeader) string {
+	for _, header := range headers {
+		if string(header.Key) == "correlationID" || string(header.Key) == "correlation_id" {
+			return string(header.Value)
+		}
+	}
+	// Se não encontrou, gera um novo UUID
+	return uuid.New().String()
 }

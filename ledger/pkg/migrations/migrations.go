@@ -2,7 +2,7 @@ package migrations
 
 import (
 	"fmt"
-	"log"
+	"ledger/pkg/logger"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -11,9 +11,12 @@ import (
 
 // RunMigrations executa as migrations do banco de dados
 func RunMigrations(databaseURL, migrationsPath string) error {
-	log.Printf("[Migrations] Iniciando migrations do banco de dados...")
-	log.Printf("[Migrations] Database URL: %s", maskPassword(databaseURL))
-	log.Printf("[Migrations] Migrations Path: %s", migrationsPath)
+
+	logger := logger.Instance()
+
+	logger.Info().Msg("Iniciando migrations do banco de dados...")
+	logger.Info().Str("database_url", maskPassword(databaseURL)).Msg("Database URL")
+	logger.Info().Str("migrations_path", migrationsPath).Msg("Migrations Path")
 
 	m, err := migrate.New(
 		fmt.Sprintf("file://%s", migrationsPath),
@@ -27,17 +30,17 @@ func RunMigrations(databaseURL, migrationsPath string) error {
 	// Obtém versão atual
 	version, dirty, err := m.Version()
 	if err != nil && err != migrate.ErrNilVersion {
-		log.Printf("[Migrations] Erro ao obter versão: %v", err)
+		logger.Error().Err(err).Msg("Erro ao obter versão das migrations")
 	} else if err == migrate.ErrNilVersion {
-		log.Printf("[Migrations] Nenhuma migration aplicada ainda")
+		logger.Info().Msg("Nenhuma migration aplicada ainda")
 	} else {
-		log.Printf("[Migrations] Versão atual: %d (dirty: %v)", version, dirty)
+		logger.Info().Int("version", int(version)).Bool("dirty", dirty).Msg("Versão atual das migrations")
 	}
 
 	// Aplica migrations
 	if err := m.Up(); err != nil {
 		if err == migrate.ErrNoChange {
-			log.Printf("[Migrations] ✓ Banco de dados já está atualizado (versão %d)", version)
+			logger.Info().Int("version", int(version)).Msg("Banco de dados já está atualizado")
 			return nil
 		}
 		return fmt.Errorf("erro ao executar migrations: %w", err)
@@ -45,7 +48,7 @@ func RunMigrations(databaseURL, migrationsPath string) error {
 
 	// Obtém nova versão
 	newVersion, _, _ := m.Version()
-	log.Printf("[Migrations] ✓ Migrations aplicadas com sucesso! Nova versão: %d", newVersion)
+	logger.Info().Int("version", int(newVersion)).Msg("Migrations aplicadas com sucesso")
 
 	return nil
 }

@@ -2,10 +2,10 @@ package transaction
 
 import (
 	"encoding/json"
-	"log"
 
 	"statement/internal/models"
 	"statement/pkg/config"
+	"statement/pkg/logger"
 	"statement/pkg/mongodb"
 )
 
@@ -21,16 +21,25 @@ func NewListener(mongoClient *mongodb.Client, cfg *config.Config) *Listener {
 	}
 }
 
-func (l *Listener) HandleMessage(key, value []byte) error {
+func (l *Listener) HandleMessage(key, value []byte, correlationID string) error {
+	log := logger.Instance()
+	log.Info().Str("correlation_id", correlationID).Msg("Processando transação confirmada")
+
 	var transactionEvent models.TransactionConfirmed
 
 	if err := json.Unmarshal(value, &transactionEvent); err != nil {
-		log.Printf("[TransactionListener] Erro ao fazer unmarshal da mensagem: %v", err)
+		log.Error().Err(err).Str("correlation_id", correlationID).Msg("Erro ao fazer unmarshal da mensagem")
 		return err
 	}
 
-	log.Printf("[TransactionListener] Processando transação %s para conta %s: tipo=%s, valor=%.2f",
-		transactionEvent.MovimentacaoID, transactionEvent.ContaID, transactionEvent.Tipo, transactionEvent.Valor)
+	log.Info().
+		Str("correlation_id", correlationID).
+		Str("transaction_id", transactionEvent.MovimentacaoID).
+		Str("account_id", transactionEvent.ContaID).
+		Str("type", transactionEvent.Tipo).
+		Float64("amount", transactionEvent.Valor).
+		Float64("balance_after", transactionEvent.BalanceAfter).
+		Msg("Processando transação")
 
 	// Mapeia para o modelo MongoDB usando movimentacao_id como _id
 	transaction := models.Transaction{
@@ -46,11 +55,25 @@ func (l *Listener) HandleMessage(key, value []byte) error {
 	}
 
 	if err := l.mongoClient.InsertTransaction(transaction); err != nil {
-		log.Printf("[TransactionListener] Erro ao inserir transação no MongoDB: %v", err)
+		log.Error().
+			Err(err).
+			Str("correlation_id", correlationID).
+			Str("transaction_id", transactionEvent.MovimentacaoID).
+			Str("account_id", transactionEvent.ContaID).
+			Str("type", transactionEvent.Tipo).
+			Float64("amount", transactionEvent.Valor).
+			Msg("Erro ao inserir transação no MongoDB")
 		return err
 	}
 
-	log.Printf("[TransactionListener] Transação %s inserida com sucesso", transactionEvent.MovimentacaoID)
+	log.Info().
+		Str("correlation_id", correlationID).
+		Str("transaction_id", transactionEvent.MovimentacaoID).
+		Str("account_id", transactionEvent.ContaID).
+		Str("type", transactionEvent.Tipo).
+		Float64("amount", transactionEvent.Valor).
+		Float64("balance_after", transactionEvent.BalanceAfter).
+		Msg("Transação inserida com sucesso")
 
 	return nil
 }

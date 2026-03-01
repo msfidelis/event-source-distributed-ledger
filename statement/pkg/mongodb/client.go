@@ -2,8 +2,8 @@ package mongodb
 
 import (
 	"context"
-	"log"
 	"statement/pkg/config"
+	"statement/pkg/logger"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -17,6 +17,7 @@ type Client struct {
 }
 
 func NewClient(cfg *config.Config) (*Client, error) {
+	log := logger.Instance()
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.MongoDB.ConnectTimeout)
 	defer cancel()
 
@@ -36,7 +37,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		return nil, err
 	}
 
-	log.Printf("[MongoDB] Conexão estabelecida com sucesso: %s", cfg.MongoDB.Database)
+	log.Info().Str("database", cfg.MongoDB.Database).Msg("Conexão estabelecida com sucesso")
 
 	db := client.Database(cfg.MongoDB.Database)
 
@@ -49,6 +50,9 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 func (c *Client) InitIndexes() error {
 	collection := c.database.Collection("transactions")
+
+	log := logger.Instance()
+	log.Info().Msg("Inicializando índices do MongoDB")
 
 	// Índice composto para queries por conta_id ordenadas por data
 	indexModel := mongo.IndexModel{
@@ -63,11 +67,11 @@ func (c *Client) InitIndexes() error {
 
 	name, err := collection.Indexes().CreateOne(ctx, indexModel)
 	if err != nil {
-		log.Printf("[MongoDB] Erro ao criar índice: %v", err)
+		log.Error().Err(err).Msg("Erro ao criar índice")
 		return err
 	}
 
-	log.Printf("[MongoDB] Índice criado: %s", name)
+	log.Info().Str("index", name).Msg("Índice criado")
 
 	return nil
 }
@@ -92,7 +96,8 @@ func (c *Client) InsertTransaction(transaction interface{}) error {
 
 func (c *Client) Close() error {
 	if c.client != nil {
-		log.Printf("[MongoDB] Fechando conex\u00e3o")
+		log := logger.Instance()
+		log.Info().Msg("Fechando conexão com MongoDB")
 		ctx, cancel := context.WithTimeout(context.Background(), c.config.MongoDB.QueryTimeout)
 		defer cancel()
 		return c.client.Disconnect(ctx)

@@ -15,6 +15,7 @@ import (
 	"ledger/internal/listeners/transaction"
 	"ledger/pkg/config"
 	database "ledger/pkg/db"
+	"ledger/pkg/logger"
 	"ledger/pkg/migrations"
 
 	"github.com/google/uuid"
@@ -26,20 +27,24 @@ var bunDB *bun.DB
 var cfg *config.Config
 
 func main() {
-	log.Println("Iniciando Ledger - Event Store")
+
+	logger := logger.Instance()
+
+	logger.Info().Msg("Iniciando Ledger - Event Store")
 
 	// Carrega configurações
 	cfg = config.Load()
 
 	// Executa migrations antes de conectar ao banco
 	if err := migrations.RunMigrations(cfg.GetDatabaseURL(), cfg.App.MigrationsPath); err != nil {
-		log.Printf("[Migrations] AVISO: Erro ao executar migrations: %v", err)
-		log.Println("[Migrations] Continuando inicialização...")
+		logger.Warn().
+			Str("error", err.Error()).
+			Msg("Erro ao executar migrations")
 	}
 
 	// Conecta ao PostgreSQL usando Bun
 	bunDB = database.GetDB()
-	log.Println("Conectado ao PostgreSQL via Bun")
+	logger.Info().Msg("Conectado ao PostgreSQL via Bun")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -50,7 +55,8 @@ func main() {
 
 	go func() {
 		<-sigChan
-		log.Println("\nSinal de interrupção recebido. Finalizando...")
+		logger.Warn().
+			Msg("Sinal de interrupção recebido. Finalizando...")
 		cancel()
 	}()
 
@@ -62,54 +68,70 @@ func main() {
 	// Listeners de Novas Contas
 	accountListener, err := account.NewListener(bunDB, cfg)
 	if err != nil {
-		log.Fatal("Erro ao criar account listener:", err)
+		logger.Fatal().
+			Err(err).
+			Msg("Erro ao criar account listener")
 	}
 
 	// Listeners de Transações
 	transactionListener, err := transaction.NewListener(bunDB, cfg.Kafka.TopicContaMovimentacao, cfg)
 	if err != nil {
-		log.Fatal("Erro ao criar transaction listener:", err)
+		logger.Fatal().
+			Err(err).
+			Msg("Erro ao criar transaction listener")
 	}
 
 	// Listener de Transações que toparam o rate limit
 	transactionRateLimitListener, err := transaction.NewListener(bunDB, cfg.Kafka.TopicTransacaoRateLimited, cfg)
 	if err != nil {
-		log.Fatal("Erro ao criar transaction listener:", err)
+		logger.Fatal().
+			Err(err).
+			Msg("Erro ao criar transaction rate limit listener")
 	}
 
 	// Listener de Rehydratation
 	rehydrateListener, err := rehydratate.NewListener(bunDB, cfg)
 	if err != nil {
-		log.Fatal("Erro ao criar rehydrate listener:", err)
+		logger.Fatal().
+			Err(err).
+			Msg("Erro ao criar rehydrate listener")
 	}
 
 	// Inicia os listeners em goroutines separadas
 	go func() {
 		if err := accountListener.StartConsuming(ctx); err != nil {
-			log.Printf("[Account] Erro no consumer: %v", err)
+			logger.Error().
+				Err(err).
+				Msg("[Account] Erro no consumer")
 		}
 	}()
 
 	go func() {
 		if err := transactionListener.StartConsuming(ctx); err != nil {
-			log.Printf("[Transaction] Erro no consumer: %v", err)
+			logger.Error().
+				Err(err).
+				Msg("[Transaction] Erro no consumer")
 		}
 	}()
 
 	go func() {
 		if err := transactionRateLimitListener.StartConsuming(ctx); err != nil {
-			log.Printf("[Transaction] Erro no consumer: %v", err)
+			logger.Error().
+				Err(err).
+				Msg("[Transaction Rate Limit] Erro no consumer")
 		}
 	}()
 
 	go func() {
 		if err := rehydrateListener.StartConsuming(ctx); err != nil {
-			log.Printf("[Rehydrate] Erro no consumer: %v", err)
+			logger.Error().
+				Err(err).
+				Msg("[Rehydrate] Erro no consumer")
 		}
 	}()
 
 	<-ctx.Done()
-	log.Println("Ledger finalizado")
+	logger.Info().Msg("Ledger finalizado")
 }
 
 func startHTTPServer() {

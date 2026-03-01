@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"simulador/pkg/config"
 
+	"github.com/google/uuid"
 	kafkago "github.com/segmentio/kafka-go"
 )
 
@@ -63,8 +64,15 @@ func NewProducer(cfg *config.Config, topic string) *Producer {
 	}
 }
 
-// Publish publica uma mensagem no Kafka
+// Publish publica uma mensagem no Kafka com correlationID gerado automaticamente
 func (p *Producer) Publish(ctx context.Context, key string, value interface{}) error {
+	// Gera um novo correlationID
+	correlationID := uuid.New().String()
+	return p.PublishWithCorrelationID(ctx, key, value, correlationID)
+}
+
+// PublishWithCorrelationID publica uma mensagem no Kafka com correlationID especificado
+func (p *Producer) PublishWithCorrelationID(ctx context.Context, key string, value interface{}, correlationID string) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("erro ao serializar mensagem: %w", err)
@@ -73,6 +81,12 @@ func (p *Producer) Publish(ctx context.Context, key string, value interface{}) e
 	msg := kafkago.Message{
 		Key:   []byte(key),
 		Value: data,
+		Headers: []kafkago.Header{
+			{
+				Key:   "correlationID",
+				Value: []byte(correlationID),
+			},
+		},
 	}
 
 	err = p.writer.WriteMessages(ctx, msg)
