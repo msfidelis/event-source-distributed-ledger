@@ -38,6 +38,7 @@ func (l *Listener) HandleMessage(key, value []byte, correlationID string) error 
 		Str("account_id", transactionEvent.ContaID).
 		Str("type", transactionEvent.Tipo).
 		Float64("amount", transactionEvent.Valor).
+		Float64("balance_after", transactionEvent.BalanceAfter).
 		Msg("Processando transação")
 
 	// Mapeia para o modelo MongoDB usando movimentacao_id como _id
@@ -54,13 +55,24 @@ func (l *Listener) HandleMessage(key, value []byte, correlationID string) error 
 	}
 
 	if err := l.mongoClient.InsertTransaction(transaction); err != nil {
-		log.Error().Err(err).Str("correlation_id", correlationID).Msg("Erro ao inserir transação no MongoDB")
+		log.Error().
+			Err(err).
+			Str("correlation_id", correlationID).
+			Str("transaction_id", transactionEvent.MovimentacaoID).
+			Str("account_id", transactionEvent.ContaID).
+			Str("type", transactionEvent.Tipo).
+			Float64("amount", transactionEvent.Valor).
+			Msg("Erro ao inserir transação no MongoDB")
 		return err
 	}
 
 	log.Info().
 		Str("correlation_id", correlationID).
 		Str("transaction_id", transactionEvent.MovimentacaoID).
+		Str("account_id", transactionEvent.ContaID).
+		Str("type", transactionEvent.Tipo).
+		Float64("amount", transactionEvent.Valor).
+		Float64("balance_after", transactionEvent.BalanceAfter).
 		Msg("Transação inserida com sucesso")
 
 	return nil

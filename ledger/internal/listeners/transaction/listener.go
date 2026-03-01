@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ledger/internal/models"
+	"ledger/internal/utils"
 	"ledger/pkg/config"
 	"ledger/pkg/envoyratelimit"
 	"ledger/pkg/events"
@@ -120,6 +121,9 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 		return fmt.Errorf("erro ao deserializar ContaMovimentacao: %w", err)
 	}
 
+	// Arredonda o valor da movimentação para 2 casas decimais
+	movimentacao.Valor = utils.RoundMoneyUp(movimentacao.Valor)
+
 	// Verifica rate limit se o cliente estiver disponível
 	if l.rateLimiter != nil {
 		ctxRL := context.Background()
@@ -160,6 +164,10 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 			metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "save_event_error").Inc()
 			logger.Error().
 				Str("correlation_id", correlationID).
+				Int64("event_id", eventID).
+				Str("account_id", movimentacao.ContaID.String()).
+				Str("type", string(movimentacao.Tipo)).
+				Float64("transaction_amount", movimentacao.Valor).
 				Err(err).
 				Msg("Erro ao salvar evento")
 			return fmt.Errorf("erro ao salvar evento: %w", err)
@@ -168,9 +176,9 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 		logger.Info().
 			Str("correlation_id", correlationID).
 			Int64("event_id", eventID).
-			Str("conta_id", movimentacao.ContaID.String()).
-			Str("tipo", string(movimentacao.Tipo)).
-			Float64("valor", movimentacao.Valor).
+			Str("account_id", movimentacao.ContaID.String()).
+			Str("type", string(movimentacao.Tipo)).
+			Float64("transaction_amount", movimentacao.Valor).
 			Msg("Evento persistido: ContaMovimentacao")
 
 		// Atualiza saldo da conta e registra transação
@@ -178,6 +186,11 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 		if err != nil {
 			logger.Error().
 				Str("correlation_id", correlationID).
+				Int64("event_id", eventID).
+				Str("account_id", movimentacao.ContaID.String()).
+				Str("type", string(movimentacao.Tipo)).
+				Float64("current_balance", balanceAfter).
+				Float64("transaction_amount", movimentacao.Valor).
 				Err(err).
 				Msg("Erro ao processar transação")
 			tx.Rollback()
@@ -198,6 +211,10 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	if err := l.publishConfirmation(movimentacao, eventID, balanceAfter, correlationID); err != nil {
 		logger.Error().
 			Str("correlation_id", correlationID).
+			Int64("event_id", eventID).
+			Str("account_id", movimentacao.ContaID.String()).
+			Str("type", string(movimentacao.Tipo)).
+			Float64("transaction_amount", movimentacao.Valor).
 			Err(err).
 			Msg("Erro ao publicar confirmação")
 	}
@@ -210,6 +227,10 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 
 	logger.Info().
 		Str("correlation_id", correlationID).
+		Int64("event_id", eventID).
+		Str("account_id", movimentacao.ContaID.String()).
+		Str("type", string(movimentacao.Tipo)).
+		Float64("transaction_amount", movimentacao.Valor).
 		Msg("Processamento concluído com sucesso")
 
 	return nil
@@ -323,9 +344,9 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 	// Calcula novo saldo
 	var newBalance float64
 	if mov.Tipo == "credito" {
-		newBalance = currentBalance + mov.Valor
+		newBalance = utils.RoundMoneyUp(currentBalance + mov.Valor)
 	} else {
-		newBalance = currentBalance - mov.Valor
+		newBalance = utils.RoundMoneyUp(currentBalance - mov.Valor)
 	}
 
 	// Valida saldo negativo
@@ -333,8 +354,10 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 		metrics.TransactionsRollbackTotal.WithLabelValues("negative_balance").Inc()
 		logger.Error().
 			Str("correlation_id", correlationID).
-			Float64("current_balance", currentBalance).
+			Str("account_id", mov.ContaID.String()).
 			Float64("transaction_amount", mov.Valor).
+			Float64("current_balance", currentBalance).
+			Float64("new_balance", newBalance).
 			Msg("Saldo insuficiente")
 		return 0, fmt.Errorf("saldo insuficiente: saldo atual=%.2f, valor=%.2f", currentBalance, mov.Valor)
 	}
@@ -380,6 +403,7 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 	logger.Info().
 		Str("correlation_id", correlationID).
 		Str("account_id", mov.ContaID.String()).
+		Float64("transaction_amount", mov.Valor).
 		Float64("current_balance", currentBalance).
 		Float64("new_balance", newBalance).
 		Msg("Transação processada")

@@ -36,7 +36,7 @@ func (l *Listener) HandleMessage(key, value []byte, correlationID string) error 
 
 	log.Info().
 		Str("correlation_id", correlationID).
-		Str("conta_id", balanceUpdate.ContaID.String()).
+		Str("account_id", balanceUpdate.ContaID.String()).
 		Float64("balance", balanceUpdate.Balance).
 		Int("version", balanceUpdate.Version).
 		Msg("Processando atualização de saldo")
@@ -44,7 +44,9 @@ func (l *Listener) HandleMessage(key, value []byte, correlationID string) error 
 	if err := l.scyllaClient.InsertBalance(balanceUpdate.ContaID, balanceUpdate.Balance, balanceUpdate.Version); err != nil {
 		log.Error().
 			Str("correlation_id", correlationID).
-			Str("conta_id", balanceUpdate.ContaID.String()).
+			Str("account_id", balanceUpdate.ContaID.String()).
+			Float64("balance", balanceUpdate.Balance).
+			Int("version", balanceUpdate.Version).
 			Err(err).
 			Msg("Erro ao inserir saldo no ScyllaDB")
 		return err
@@ -52,7 +54,9 @@ func (l *Listener) HandleMessage(key, value []byte, correlationID string) error 
 
 	log.Info().
 		Str("correlation_id", correlationID).
-		Str("conta_id", balanceUpdate.ContaID.String()).
+		Str("account_id", balanceUpdate.ContaID.String()).
+		Float64("balance", balanceUpdate.Balance).
+		Int("version", balanceUpdate.Version).
 		Msg("Saldo atualizado com sucesso")
 
 	return nil

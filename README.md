@@ -455,3 +455,13 @@ Todas as imagens estão disponíveis no Docker Hub e são otimizadas para produ�
 
 ---
 
+### Loki Useful Queries
+
+```
+{namespace="ledger"}
+| json
+| line_format `{{.message}}`
+| json
+| json log=`message`
+| correlation_id="abe00479-546f-47c2-aa10-317a11f74317"
+```

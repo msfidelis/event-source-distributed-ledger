@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ledger/internal/models"
+	"ledger/internal/utils"
 	"ledger/pkg/config"
 	"ledger/pkg/events"
 	"ledger/pkg/kafka"
@@ -105,6 +106,9 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 		return fmt.Errorf("erro ao deserializar ContaCriada: %w", err)
 	}
 
+	// Arredonda o saldo inicial para 2 casas decimais
+	contaCriada.SaldoInicial = utils.RoundMoneyUp(contaCriada.SaldoInicial)
+
 	// PRIMEIRO: Cria registro na tabela accounts (para satisfazer FK da tabela events)
 	if err := l.createAccount(contaCriada, correlationID); err != nil {
 		logger.Error().
@@ -136,7 +140,7 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	logger.Info().
 		Str("correlation_id", correlationID).
 		Int64("event_id", eventID).
-		Str("conta_id", contaCriada.ContaID.String()).
+		Str("account_id", contaCriada.ContaID.String()).
 		Str("nome_proprietario", contaCriada.NomeProprietario).
 		Float64("saldo_inicial", contaCriada.SaldoInicial).
 		Msg("Evento persistido: ContaCriada")
@@ -253,10 +257,13 @@ func (l *Listener) createAccount(conta events.ContaCriada, correlationID string)
 	ctx := context.Background()
 	logger := logger.Instance()
 
+	// Arredonda o saldo inicial para 2 casas decimais
+	saldoInicial := utils.RoundMoneyUp(conta.SaldoInicial)
+
 	account := &models.Account{
 		AggregateID: conta.ContaID,
 		OwnerName:   conta.NomeProprietario,
-		Balance:     conta.SaldoInicial,
+		Balance:     saldoInicial,
 		Status:      "active",
 		CreatedAt:   conta.CriadoEm,
 		UpdatedAt:   time.Now(),
@@ -282,11 +289,11 @@ func (l *Listener) createAccount(conta events.ContaCriada, correlationID string)
 		Str("correlation_id", correlationID).
 		Str("conta_id", conta.ContaID.String()).
 		Str("nome_proprietario", conta.NomeProprietario).
-		Float64("saldo_inicial", conta.SaldoInicial).
+		Float64("saldo_inicial", saldoInicial).
 		Msg("Conta criada na tabela accounts")
 
 	// Publica evento de saldo atualizado
-	if err := l.publishBalanceUpdate(conta.ContaID, conta.SaldoInicial, 1, correlationID); err != nil {
+	if err := l.publishBalanceUpdate(conta.ContaID, saldoInicial, 1, correlationID); err != nil {
 		logger.Error().
 			Str("correlation_id", correlationID).
 			Err(err).

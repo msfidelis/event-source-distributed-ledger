@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ledger/internal/models"
+	"ledger/internal/utils"
 	"ledger/pkg/config"
 	"ledger/pkg/events"
 	"ledger/pkg/kafka"
@@ -190,9 +191,9 @@ func (l *Listener) reprocessTransaction(event models.Event, currentBalance float
 
 	var newBalance float64
 	if movimentacao.Tipo == events.TipoCredito {
-		newBalance = currentBalance + movimentacao.Valor
+		newBalance = utils.RoundMoneyUp(currentBalance + movimentacao.Valor)
 	} else {
-		newBalance = currentBalance - movimentacao.Valor
+		newBalance = utils.RoundMoneyUp(currentBalance - movimentacao.Valor)
 	}
 
 	log.Printf("[Rehydrate] [CorrelationID: %s] Transação: tipo=%s, valor=%.2f, saldo: %.2f → %.2f",
