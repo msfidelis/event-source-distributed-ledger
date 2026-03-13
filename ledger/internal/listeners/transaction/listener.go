@@ -41,6 +41,7 @@ func NewListener(db *bun.DB, topic string, cfg *config.Config) (*Listener, error
 	rateLimiter, err := envoyratelimit.GetInstance(cfg.RateLimit.Host)
 	if err != nil {
 		logger.Warn().
+			Str("operation", "nova_transacao").
 			Err(err).
 			Msg("Aviso: Rate Limiter não disponível")
 		// Não retorna erro, permite continuar sem rate limiting
@@ -62,6 +63,7 @@ func (l *Listener) StartConsuming(ctx context.Context) error {
 	logger := logger.Instance()
 
 	logger.Info().
+		Str("operation", "nova_transacao").
 		Str("topic", topic).
 		Str("group_id", groupID).
 		Msg("Iniciando listener de transação")
@@ -69,6 +71,7 @@ func (l *Listener) StartConsuming(ctx context.Context) error {
 	consumer := kafka.NewConsumer(l.config.Kafka.Brokers, topic, groupID)
 	defer func() {
 		logger.Info().
+			Str("operation", "nova_transacao").
 			Str("topic", topic).
 			Str("group_id", groupID).
 			Msg("Fechando consumer do tópico")
@@ -87,6 +90,7 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	logger := logger.Instance()
 
 	logger.Info().
+		Str("operation", "nova_transacao").
 		Str("correlation_id", correlationID).
 		Msg("Processando evento de movimentação")
 
@@ -94,6 +98,7 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	if err := json.Unmarshal(value, &envelope); err != nil {
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "unmarshal_error").Inc()
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Err(err).
 			Msg("Erro ao deserializar envelope")
@@ -105,6 +110,7 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	if err != nil {
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "marshal_error").Inc()
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Err(err).
 			Msg("Erro ao serializar data")
@@ -115,6 +121,7 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	if err := json.Unmarshal(dataBytes, &movimentacao); err != nil {
 		metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "unmarshal_data_error").Inc()
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Err(err).
 			Msg("Erro ao deserializar ContaMovimentacao")
@@ -124,12 +131,37 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	// Arredonda o valor da movimentação para 2 casas decimais
 	movimentacao.Valor = utils.RoundMoneyUp(movimentacao.Valor)
 
+	logger.Debug().
+		Str("operation", "nova_transacao").
+		Str("correlation_id", correlationID).
+		Str("account_id", movimentacao.ContaID.String()).
+		Str("transaction_id", movimentacao.MovimentacaoID.String()).
+		Str("movimentacao_tipo", string(movimentacao.Tipo)).
+		Float64("amount", movimentacao.Valor).
+		Msg("Transação Deserializada")
+
+	logger.Info().
+		Str("operation", "nova_transacao").
+		Str("correlation_id", correlationID).
+		Str("account_id", movimentacao.ContaID.String()).
+		Str("transaction_id", movimentacao.MovimentacaoID.String()).
+		Msg("Checando rate limit da conta")
+
 	// Verifica rate limit se o cliente estiver disponível
 	if l.rateLimiter != nil {
+
+		logger.Info().
+			Str("operation", "nova_transacao").
+			Str("correlation_id", correlationID).
+			Str("account_id", movimentacao.ContaID.String()).
+			Str("transaction_id", movimentacao.MovimentacaoID.String()).
+			Msg("Evento LIberado pelo Rate Limiter")
+
 		ctxRL := context.Background()
 		allowed, err := l.rateLimiter.ShouldRateLimit(ctxRL, "ledger-transactions", "account", movimentacao.ContaID.String())
 		if err != nil {
 			logger.Error().
+				Str("operation", "nova_transacao").
 				Str("correlation_id", correlationID).
 				Err(err).
 				Msg("Erro ao verificar rate limit")
@@ -140,6 +172,7 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 			// Publica evento no tópico de rate limited
 			if err := l.publishRateLimitedEvent(movimentacao, key, value, correlationID); err != nil {
 				logger.Error().
+					Str("operation", "nova_transacao").
 					Str("correlation_id", correlationID).
 					Err(err).
 					Msg("Erro ao publicar evento rate limited")
@@ -155,6 +188,7 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 
 	// Executa as operações de event sourcing e balance dentro de uma transaction
 	txErr := l.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+
 		// Persiste no event store
 		var err error
 		eventID, err = l.saveEventTx(ctx, tx, movimentacao.ContaID, "Account",
@@ -163,6 +197,7 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 			tx.Rollback()
 			metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "save_event_error").Inc()
 			logger.Error().
+				Str("operation", "nova_transacao").
 				Str("correlation_id", correlationID).
 				Int64("event_id", eventID).
 				Str("account_id", movimentacao.ContaID.String()).
@@ -174,17 +209,28 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 		}
 
 		logger.Info().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Int64("event_id", eventID).
 			Str("account_id", movimentacao.ContaID.String()).
 			Str("type", string(movimentacao.Tipo)).
 			Float64("transaction_amount", movimentacao.Valor).
-			Msg("Evento persistido: ContaMovimentacao")
+			Msg("Movimentação salva no event store")
+
+		logger.Info().
+			Str("operation", "nova_transacao").
+			Str("correlation_id", correlationID).
+			Int64("event_id", eventID).
+			Str("account_id", movimentacao.ContaID.String()).
+			Str("type", string(movimentacao.Tipo)).
+			Float64("transaction_amount", movimentacao.Valor).
+			Msg("Atualizando saldo da conta")
 
 		// Atualiza saldo da conta e registra transação
 		balanceAfter, err = l.processTransactionTx(ctx, tx, movimentacao, correlationID)
 		if err != nil {
 			logger.Error().
+				Str("operation", "nova_transacao").
 				Str("correlation_id", correlationID).
 				Int64("event_id", eventID).
 				Str("account_id", movimentacao.ContaID.String()).
@@ -192,14 +238,36 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 				Float64("current_balance", balanceAfter).
 				Float64("transaction_amount", movimentacao.Valor).
 				Err(err).
-				Msg("Erro ao processar transação")
-			tx.Rollback()
+				Msg("Erro ao processar a operação de saldo")
+
 			metrics.TransactionsRollbackTotal.WithLabelValues("processing_error").Inc()
 			metrics.EventsFailedTotal.WithLabelValues(eventType, listener, "process_transaction_error").Inc()
+
+			tx.Rollback()
+
+			logger.Warn().
+				Str("operation", "nova_transacao").
+				Str("correlation_id", correlationID).
+				Int64("event_id", eventID).
+				Str("account_id", movimentacao.ContaID.String()).
+				Str("type", string(movimentacao.Tipo)).
+				Float64("current_balance", balanceAfter).
+				Float64("transaction_amount", movimentacao.Valor).
+				Msg("Rollback da transação devido a erro no processamento")
+
 			return fmt.Errorf("erro ao processar transação: %w", err)
 		}
-		// Commit
-		// tx.Commit()
+
+		logger.Info().
+			Str("operation", "nova_transacao").
+			Str("correlation_id", correlationID).
+			Int64("event_id", eventID).
+			Str("account_id", movimentacao.ContaID.String()).
+			Str("type", string(movimentacao.Tipo)).
+			Float64("current_balance", balanceAfter).
+			Float64("transaction_amount", movimentacao.Valor).
+			Msg("Atualização de saldo executada com sucesso")
+
 		return nil
 	})
 
@@ -207,16 +275,26 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 		return txErr
 	}
 
+	logger.Info().
+		Str("operation", "nova_transacao").
+		Str("correlation_id", correlationID).
+		Int64("event_id", eventID).
+		Str("account_id", movimentacao.ContaID.String()).
+		Str("type", string(movimentacao.Tipo)).
+		Float64("transaction_amount", movimentacao.Valor).
+		Msg("Publicando eventos no EventBus")
+
 	// Publica confirmação após commit da transação
 	if err := l.publishConfirmation(movimentacao, eventID, balanceAfter, correlationID); err != nil {
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Int64("event_id", eventID).
 			Str("account_id", movimentacao.ContaID.String()).
 			Str("type", string(movimentacao.Tipo)).
 			Float64("transaction_amount", movimentacao.Valor).
 			Err(err).
-			Msg("Erro ao publicar confirmação")
+			Msg("Erro ao publicar confirmação da transação no EventBus")
 	}
 
 	// Métricas de sucesso
@@ -226,12 +304,13 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	metrics.TransactionsPerAccount.WithLabelValues(movimentacao.ContaID.String()).Inc()
 
 	logger.Info().
+		Str("operation", "nova_transacao").
 		Str("correlation_id", correlationID).
 		Int64("event_id", eventID).
 		Str("account_id", movimentacao.ContaID.String()).
 		Str("type", string(movimentacao.Tipo)).
 		Float64("transaction_amount", movimentacao.Valor).
-		Msg("Processamento concluído com sucesso")
+		Msg("Processamento da transação concluído com sucesso")
 
 	return nil
 }
@@ -256,6 +335,7 @@ func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.
 	if err != nil {
 		metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Err(err).
 			Msg("Erro ao obter versão")
@@ -267,6 +347,7 @@ func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.
 	if err != nil {
 		metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "error").Inc()
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Err(err).
 			Msg("Erro ao serializar metadata")
@@ -293,6 +374,7 @@ func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.
 		// Detecta conflitos de versão (optimistic locking)
 		if isVersionConflict(err) {
 			logger.Error().
+				Str("operation", "nova_transacao").
 				Str("correlation_id", correlationID).
 				Str("aggregate_id", aggregateID.String()).
 				Msg("Version conflict")
@@ -300,6 +382,7 @@ func (l *Listener) saveEventTx(ctx context.Context, tx bun.Tx, aggregateID uuid.
 			metrics.EventsAppendedTotal.WithLabelValues(aggregateType, eventType, "version_conflict").Inc()
 		} else {
 			logger.Error().
+				Str("operation", "nova_transacao").
 				Str("correlation_id", correlationID).
 				Err(err).
 				Msg("Erro ao inserir evento")
@@ -333,6 +416,7 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 		Scan(ctx)
 	if err != nil {
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Err(err).
 			Msg("Erro ao obter saldo")
@@ -353,8 +437,10 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 	if newBalance < 0 {
 		metrics.TransactionsRollbackTotal.WithLabelValues("negative_balance").Inc()
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Str("account_id", mov.ContaID.String()).
+			Str("type", string(mov.Tipo)).
 			Float64("transaction_amount", mov.Valor).
 			Float64("current_balance", currentBalance).
 			Float64("new_balance", newBalance).
@@ -371,6 +457,7 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 		Exec(ctx)
 	if err != nil {
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Err(err).
 			Msg("Erro ao atualizar saldo")
@@ -394,6 +481,7 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 		Exec(ctx)
 	if err != nil {
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Err(err).
 			Msg("Erro ao registrar transação")
@@ -401,12 +489,14 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 	}
 
 	logger.Info().
+		Str("operation", "nova_transacao").
 		Str("correlation_id", correlationID).
 		Str("account_id", mov.ContaID.String()).
+		Str("type", string(mov.Tipo)).
 		Float64("transaction_amount", mov.Valor).
-		Float64("current_balance", currentBalance).
+		Float64("initial_balance", currentBalance).
 		Float64("new_balance", newBalance).
-		Msg("Transação processada")
+		Msg("Transação processada com sucesso")
 
 	// Obtém versão atual da conta para publicar com saldo
 	var version int
@@ -417,6 +507,7 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 		Scan(ctx, &version)
 	if err != nil {
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Err(err).
 			Msg("Erro ao obter versão")
@@ -425,6 +516,7 @@ func (l *Listener) processTransactionTx(ctx context.Context, tx bun.Tx, mov even
 	// Publica evento de saldo atualizado
 	if err := l.publishBalanceUpdate(mov.ContaID, newBalance, version, correlationID); err != nil {
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
 			Err(err).
 			Msg("Erro ao publicar saldo atualizado")
@@ -453,7 +545,11 @@ func (l *Listener) publishConfirmation(mov events.ContaMovimentacao, eventID int
 	confirmationJSON, err := json.Marshal(confirmation)
 	if err != nil {
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
+			Str("conta_id", mov.ContaID.String()).
+			Str("type", string(mov.Tipo)).
+			Float64("transaction_amount", mov.Valor).
 			Err(err).
 			Msg("Erro ao serializar confirmação")
 		return fmt.Errorf("erro ao serializar confirmação: %w", err)
@@ -463,21 +559,37 @@ func (l *Listener) publishConfirmation(mov events.ContaMovimentacao, eventID int
 	headers := map[string]string{
 		"correlationID": correlationID,
 	}
+
+	logger.Info().
+		Str("operation", "nova_transacao").
+		Str("correlation_id", correlationID).
+		Str("topic", topic).
+		Str("conta_id", mov.ContaID.String()).
+		Str("movimentacao_id", mov.MovimentacaoID.String()).
+		Int64("event_id", eventID).
+		Msg("Publicando a nova transação no EventBus")
+
 	// Publica no tópico de confirmações com headers
 	if err := l.producer.PublishWithHeaders(topic, []byte(mov.ContaID.String()), confirmationJSON, headers); err != nil {
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
+			Str("conta_id", mov.ContaID.String()).
+			Str("movimentacao_id", mov.MovimentacaoID.String()).
 			Err(err).
 			Msgf("Erro ao publicar no tópico %s", topic)
 		return fmt.Errorf("erro ao publicar no tópico %s: %w", topic, err)
 	}
 
 	logger.Info().
+		Str("operation", "nova_transacao").
 		Str("correlation_id", correlationID).
 		Str("topic", topic).
+		Str("conta_id", mov.ContaID.String()).
 		Str("movimentacao_id", mov.MovimentacaoID.String()).
 		Int64("event_id", eventID).
-		Msg("Confirmação publicada")
+		Msg("Confirmação da transação publicada com sucesso no EventBus")
+
 	return nil
 }
 
@@ -494,7 +606,9 @@ func (l *Listener) publishBalanceUpdate(contaID uuid.UUID, balance float64, vers
 	balanceJSON, err := json.Marshal(balanceUpdate)
 	if err != nil {
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
+			Str("conta_id", contaID.String()).
 			Err(err).
 			Msg("Erro ao serializar saldo atualizado")
 		return fmt.Errorf("erro ao serializar saldo atualizado: %w", err)
@@ -504,22 +618,28 @@ func (l *Listener) publishBalanceUpdate(contaID uuid.UUID, balance float64, vers
 	headers := map[string]string{
 		"correlationID": correlationID,
 	}
+
 	// Publica no tópico de saldo atualizado com headers
 	if err := l.producer.PublishWithHeaders(topic, []byte(contaID.String()), balanceJSON, headers); err != nil {
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
+			Str("conta_id", contaID.String()).
+			Str("topic", topic).
 			Err(err).
-			Msgf("Erro ao publicar no tópico %s", topic)
+			Msgf("Erro ao publicar no tópico de saldo")
+
 		return fmt.Errorf("erro ao publicar no tópico %s: %w", topic, err)
 	}
 
 	logger.Info().
+		Str("operation", "nova_transacao").
 		Str("correlation_id", correlationID).
 		Str("topic", topic).
 		Str("conta_id", contaID.String()).
 		Float64("balance", balance).
 		Int("version", version).
-		Msg("Saldo atualizado publicado")
+		Msg("Saldo atualizado publicado no EventBus")
 
 	return nil
 }
@@ -533,13 +653,18 @@ func (l *Listener) publishRateLimitedEvent(mov events.ContaMovimentacao, key []b
 	// Publica no tópico de transações bloqueadas por rate limit com headers
 	if err := l.producer.PublishWithHeaders(topic, key, value, headers); err != nil {
 		logger.Error().
+			Str("operation", "nova_transacao").
 			Str("correlation_id", correlationID).
+			Str("conta_id", mov.ContaID.String()).
+			Str("movimentacao_id", mov.MovimentacaoID.String()).
+			Str("topic", topic).
 			Err(err).
-			Msgf("Erro ao publicar no tópico %s", topic)
-		return fmt.Errorf("erro ao publicar no tópico %s: %w", topic, err)
+			Msgf("Erro ao publicar no tópico")
+		return fmt.Errorf("erro ao publicar no tópico de ratelimit %s: %w", topic, err)
 	}
 
 	logger.Debug().
+		Str("operation", "nova_transacao").
 		Str("correlation_id", correlationID).
 		Str("topic", topic).
 		Str("conta_id", mov.ContaID.String()).
