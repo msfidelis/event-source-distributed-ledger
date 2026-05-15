@@ -10,10 +10,15 @@ import (
 
 	"statement-api/pkg/config"
 	"statement-api/pkg/logger"
+	"statement-api/pkg/middleware"
 	"statement-api/pkg/mongodb"
+	"statement-api/pkg/observability"
 	"statement-api/routes"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 
@@ -35,8 +40,16 @@ func main() {
 	}
 	defer mongoClient.Close()
 
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	observability.RegisterMetrics(reg)
+
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(middleware.Prometheus())
 	router.Use(func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
@@ -54,6 +67,7 @@ func main() {
 	statementHandler := routes.NewStatementHandler(mongoClient, appLog)
 	probeHandler := routes.NewProbeHandler(mongoClient, cfg.App.Environment)
 
+	router.GET("/metrics", gin.WrapH(promhttp.HandlerFor(reg, promhttp.HandlerOpts{})))
 	router.GET("/health", probeHandler.Health)
 	router.GET("/livez", probeHandler.Livez)
 	router.GET("/readyz", probeHandler.Readyz)

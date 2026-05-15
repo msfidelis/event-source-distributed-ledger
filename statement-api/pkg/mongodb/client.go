@@ -3,11 +3,14 @@ package mongodb
 import (
 	"context"
 	"fmt"
-	"statement-api/pkg/config"
-	"statement-api/pkg/logger"
 	"time"
 
+	"statement-api/pkg/config"
+	"statement-api/pkg/logger"
+	"statement-api/pkg/observability"
+
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/event"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -45,9 +48,22 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	uri := cfg.GetMongoURI()
 	clientOptions := options.Client().ApplyURI(uri)
 
-	// Set pool size options
 	clientOptions.SetMaxPoolSize(cfg.MongoDB.MaxPoolSize)
 	clientOptions.SetMinPoolSize(cfg.MongoDB.MinPoolSize)
+	clientOptions.SetPoolMonitor(&event.PoolMonitor{
+		Event: func(e *event.PoolEvent) {
+			switch e.Type {
+			case event.ConnectionCreated:
+				observability.MongoConnectionPoolSize.Inc()
+			case event.ConnectionClosed:
+				observability.MongoConnectionPoolSize.Dec()
+			case event.GetSucceeded:
+				observability.MongoConnectionPoolInUse.Inc()
+			case event.ConnectionReturned:
+				observability.MongoConnectionPoolInUse.Dec()
+			}
+		},
+	})
 
 	client, err := mongo.Connect(ctx, clientOptions)
 	if err != nil {
@@ -84,22 +100,38 @@ func (c *Client) GetStatements(ctx context.Context, contaID string, startDate, e
 	ctx, cancel := context.WithTimeout(ctx, c.config.MongoDB.QueryTimeout)
 	defer cancel()
 
-	// Conta total de documentos
+	countStart := time.Now()
 	totalItems, err := collection.CountDocuments(ctx, filter)
+	countResult := "success"
+	if err != nil {
+		countResult = "error"
+	}
+	observability.MongoOperationDurationSeconds.WithLabelValues("count_documents", "transactions", countResult).Observe(time.Since(countStart).Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("mongo count_documents conta_id=%s: %w", contaID, err)
 	}
 
-	// Calcula skip
 	skip := int64((page - 1) * itemsPerPage)
 
-	// Options para paginação e ordenação
 	findOptions := options.Find().
 		SetSort(bson.D{{Key: "ocorrido_em", Value: -1}}).
 		SetSkip(skip).
 		SetLimit(int64(itemsPerPage))
 
+	findStart := time.Now()
 	cursor, err := collection.Find(ctx, filter, findOptions)
+	findResult := "success"
+	if err != nil {
+		findResult = "error"
+	}
+
+	// Métricas
+	observability.
+		MongoOperationDurationSeconds.
+		WithLabelValues("find", "transactions", findResult).
+		Observe(time.Since(findStart).
+			Seconds())
+
 	if err != nil {
 		return nil, fmt.Errorf("mongo find conta_id=%s page=%d: %w", contaID, page, err)
 	}
@@ -107,13 +139,18 @@ func (c *Client) GetStatements(ctx context.Context, contaID string, startDate, e
 
 	var transactions []Transaction
 	if err := cursor.All(ctx, &transactions); err != nil {
+		observability.
+			MongoOperationDurationSeconds.
+			WithLabelValues("cursor_decode", "transactions", "error").Observe(0)
 		return nil, fmt.Errorf("mongo cursor_decode conta_id=%s: %w", contaID, err)
 	}
 
-	// Se não houver transações, retorna slice vazio ao invés de nil
 	if transactions == nil {
 		transactions = []Transaction{}
 	}
+	observability.
+		StatementTransactionsReturned.
+		Observe(float64(len(transactions)))
 
 	// Calcula total de páginas
 	totalPages := int(totalItems) / itemsPerPage
