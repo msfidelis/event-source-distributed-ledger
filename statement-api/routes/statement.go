@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -42,7 +43,7 @@ func (h *StatementHandler) GetStatements(c *gin.Context) {
 		startDate, err = parseDate(initialDateStr)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "invalid initial_date format, use YYYY-MM-DD or RFC3339",
+				"error": fmt.Sprintf("formato de data inválido para initial_date: %s", err.Error()),
 			})
 			return
 		}
@@ -55,7 +56,7 @@ func (h *StatementHandler) GetStatements(c *gin.Context) {
 		endDate, err = parseDate(endDateStr)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "invalid end_date format, use YYYY-MM-DD or RFC3339",
+				"error": fmt.Sprintf("formato de data inválido para end_date: %s", err.Error()),
 			})
 			return
 		}
@@ -64,9 +65,16 @@ func (h *StatementHandler) GetStatements(c *gin.Context) {
 	}
 
 	// Valida range de datas
-	if startDate.After(endDate) {
+	if endDate.Before(startDate) {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "initial_date must be before end_date",
+			"error": "end_date must not be before initial_date",
+		})
+		return
+	}
+
+	if endDate.Sub(startDate) > 366*24*time.Hour {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "date range must not exceed 366 days",
 		})
 		return
 	}
@@ -96,17 +104,22 @@ func (h *StatementHandler) GetStatements(c *gin.Context) {
 }
 
 func parseDate(dateStr string) (time.Time, error) {
-	// Tenta parsear como data simples (YYYY-MM-DD)
-	if t, err := time.Parse("2006-01-02", dateStr); err == nil {
+	switch {
+	case len(dateStr) == 10:
+		t, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("formato de data inválido %q: esperado YYYY-MM-DD ou RFC3339: %w", dateStr, err)
+		}
 		return t, nil
-	}
-
-	// Tenta parsear como RFC3339
-	if t, err := time.Parse(time.RFC3339, dateStr); err == nil {
+	case len(dateStr) >= 20:
+		t, err := time.Parse(time.RFC3339, dateStr)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("formato de data inválido %q: esperado YYYY-MM-DD ou RFC3339: %w", dateStr, err)
+		}
 		return t, nil
+	default:
+		return time.Time{}, fmt.Errorf("formato de data inválido %q: esperado YYYY-MM-DD ou RFC3339", dateStr)
 	}
-
-	return time.Time{}, nil
 }
 
 func parseIntQuery(c *gin.Context, key string, defaultValue int) int {
