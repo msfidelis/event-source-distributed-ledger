@@ -68,7 +68,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) GetStatements(contaID string, startDate, endDate time.Time, page, itemsPerPage int) (*StatementResult, error) {
+func (c *Client) GetStatements(ctx context.Context, contaID string, startDate, endDate time.Time, page, itemsPerPage int) (*StatementResult, error) {
 	collection := c.database.Collection("transactions")
 
 	filter := bson.M{
@@ -79,7 +79,7 @@ func (c *Client) GetStatements(contaID string, startDate, endDate time.Time, pag
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.config.MongoDB.QueryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.config.MongoDB.QueryTimeout)
 	defer cancel()
 
 	// Conta total de documentos

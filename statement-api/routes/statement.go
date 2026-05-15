@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -92,8 +94,12 @@ func (h *StatementHandler) GetStatements(c *gin.Context) {
 	}
 
 	// Busca statements
-	result, err := h.mongoClient.GetStatements(contaID, startDate, endDate, page, itemsPerPage)
+	result, err := h.mongoClient.GetStatements(c.Request.Context(), contaID, startDate, endDate, page, itemsPerPage)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			// Cliente desconectou intencionalmente — não logar como erro e não escrever resposta HTTP
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Error fetching statements",
 		})
