@@ -130,6 +130,10 @@ func (c *Client) GetStatements(ctx context.Context, contaID string, startDate, e
 	}, nil
 }
 
+func (c *Client) Ping(ctx context.Context) error {
+	return c.client.Ping(ctx, nil)
+}
+
 func (c *Client) Close() error {
 	if c.client != nil {
 		log := logger.New()

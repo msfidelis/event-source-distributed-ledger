@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+
 func main() {
 	appLog := logger.New()
 	appLog.Info().Msg("Starting Statement API Service")
@@ -51,13 +52,11 @@ func main() {
 	})
 
 	statementHandler := routes.NewStatementHandler(mongoClient, appLog)
+	probeHandler := routes.NewProbeHandler(mongoClient, cfg.App.Environment)
 
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"status":      "ok",
-			"environment": cfg.App.Environment,
-		})
-	})
+	router.GET("/health", probeHandler.Health)
+	router.GET("/livez", probeHandler.Livez)
+	router.GET("/readyz", probeHandler.Readyz)
 	router.GET("/statements/:account_id", statementHandler.GetStatements)
 
 	// Configura servidor HTTP com timeouts
