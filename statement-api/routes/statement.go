@@ -11,25 +11,28 @@ import (
 	"statement-api/pkg/mongodb"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog"
 )
 
 type StatementHandler struct {
 	mongoClient *mongodb.Client
+	log         zerolog.Logger
 }
 
-func NewStatementHandler(mongoClient *mongodb.Client) *StatementHandler {
+func NewStatementHandler(mongoClient *mongodb.Client, log zerolog.Logger) *StatementHandler {
 	return &StatementHandler{
 		mongoClient: mongoClient,
+		log:         log,
 	}
 }
 
 func (h *StatementHandler) GetStatements(c *gin.Context) {
-	contaID := c.Param("conta_id")
+	accountID := c.Param("account_id")
 
-	// Valida se conta_id foi fornecido
-	if contaID == "" {
+	// Valida se account_id foi fornecido
+	if accountID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "conta_id is required",
+			"error": "account_id is required",
 		})
 		return
 	}
@@ -45,12 +48,12 @@ func (h *StatementHandler) GetStatements(c *gin.Context) {
 		startDate, err = parseDate(initialDateStr)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": fmt.Sprintf("formato de data inválido para initial_date: %s", err.Error()),
+				"error": fmt.Sprintf("invalid initial_date: %s", err.Error()),
 			})
 			return
 		}
 	} else {
-		// Últimos 30 dias
+		// Last 30 days
 		startDate = time.Now().AddDate(0, 0, -30)
 	}
 
@@ -58,7 +61,7 @@ func (h *StatementHandler) GetStatements(c *gin.Context) {
 		endDate, err = parseDate(endDateStr)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": fmt.Sprintf("formato de data inválido para end_date: %s", err.Error()),
+				"error": fmt.Sprintf("invalid end_date: %s", err.Error()),
 			})
 			return
 		}
@@ -66,7 +69,7 @@ func (h *StatementHandler) GetStatements(c *gin.Context) {
 		endDate = time.Now()
 	}
 
-	// Valida range de datas
+	// Validate date range
 	if endDate.Before(startDate) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "end_date must not be before initial_date",
@@ -94,12 +97,35 @@ func (h *StatementHandler) GetStatements(c *gin.Context) {
 	}
 
 	// Busca statements
-	result, err := h.mongoClient.GetStatements(c.Request.Context(), contaID, startDate, endDate, page, itemsPerPage)
+	h.log.Info().
+		Str("account_id", accountID).
+		Str("initial_date", initialDateStr).
+		Str("end_date", endDateStr).
+		Int("page", page).
+		Int("items_per_page", itemsPerPage).
+		Msg("Fetching statements")
+
+	result, err := h.mongoClient.GetStatements(c.Request.Context(), accountID, startDate, endDate, page, itemsPerPage)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			// Cliente desconectou intencionalmente — não logar como erro e não escrever resposta HTTP
+			h.log.Error().
+				Err(err).
+				Str("account_id", accountID).
+				Str("initial_date", initialDateStr).
+				Str("end_date", endDateStr).
+				Int("page", page).
+				Int("items_per_page", itemsPerPage).
+				Msg("Context canceled while fetching statements")
 			return
 		}
+		h.log.Error().
+			Err(err).
+			Str("account_id", accountID).
+			Str("initial_date", initialDateStr).
+			Str("end_date", endDateStr).
+			Int("page", page).
+			Int("items_per_page", itemsPerPage).
+			Msg("Error fetching statements")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Error fetching statements",
 		})
@@ -114,17 +140,17 @@ func parseDate(dateStr string) (time.Time, error) {
 	case len(dateStr) == 10:
 		t, err := time.Parse("2006-01-02", dateStr)
 		if err != nil {
-			return time.Time{}, fmt.Errorf("formato de data inválido %q: esperado YYYY-MM-DD ou RFC3339: %w", dateStr, err)
+			return time.Time{}, fmt.Errorf("invalid date format %q: expected YYYY-MM-DD or RFC3339: %w", dateStr, err)
 		}
 		return t, nil
 	case len(dateStr) >= 20:
 		t, err := time.Parse(time.RFC3339, dateStr)
 		if err != nil {
-			return time.Time{}, fmt.Errorf("formato de data inválido %q: esperado YYYY-MM-DD ou RFC3339: %w", dateStr, err)
+			return time.Time{}, fmt.Errorf("invalid date format %q: expected YYYY-MM-DD or RFC3339: %w", dateStr, err)
 		}
 		return t, nil
 	default:
-		return time.Time{}, fmt.Errorf("formato de data inválido %q: esperado YYYY-MM-DD ou RFC3339", dateStr)
+		return time.Time{}, fmt.Errorf("invalid date format %q: expected YYYY-MM-DD or RFC3339", dateStr)
 	}
 }
 

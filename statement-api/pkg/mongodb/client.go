@@ -2,8 +2,9 @@ package mongodb
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"statement-api/pkg/config"
+	"statement-api/pkg/logger"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -57,7 +58,8 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		return nil, err
 	}
 
-	log.Printf("[MongoDB] Conexão estabelecida com sucesso: %s", cfg.MongoDB.Database)
+	log := logger.New()
+	log.Info().Str("database", cfg.MongoDB.Database).Msg("Conexão estabelecida com sucesso")
 
 	db := client.Database(cfg.MongoDB.Database)
 
@@ -85,7 +87,7 @@ func (c *Client) GetStatements(ctx context.Context, contaID string, startDate, e
 	// Conta total de documentos
 	totalItems, err := collection.CountDocuments(ctx, filter)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mongo count_documents conta_id=%s: %w", contaID, err)
 	}
 
 	// Calcula skip
@@ -99,13 +101,13 @@ func (c *Client) GetStatements(ctx context.Context, contaID string, startDate, e
 
 	cursor, err := collection.Find(ctx, filter, findOptions)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mongo find conta_id=%s page=%d: %w", contaID, page, err)
 	}
 	defer cursor.Close(ctx)
 
 	var transactions []Transaction
 	if err := cursor.All(ctx, &transactions); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mongo cursor_decode conta_id=%s: %w", contaID, err)
 	}
 
 	// Se não houver transações, retorna slice vazio ao invés de nil
@@ -130,7 +132,8 @@ func (c *Client) GetStatements(ctx context.Context, contaID string, startDate, e
 
 func (c *Client) Close() error {
 	if c.client != nil {
-		log.Printf("[MongoDB] Fechando conexão")
+		log := logger.New()
+		log.Info().Str("database", c.config.MongoDB.Database).Msg("Fechando conexão")
 		ctx, cancel := context.WithTimeout(context.Background(), c.config.MongoDB.QueryTimeout)
 		defer cancel()
 		return c.client.Disconnect(ctx)

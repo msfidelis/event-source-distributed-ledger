@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"statement-api/pkg/config"
+	"statement-api/pkg/logger"
 	"statement-api/pkg/mongodb"
 	"statement-api/routes"
 
@@ -17,25 +17,40 @@ import (
 )
 
 func main() {
-	log.Println("Iniciando Statement API Service...")
+	appLog := logger.New()
+	appLog.Info().Msg("Starting Statement API Service")
 
-	// Carrega configurações
+	// Load configurations
 	cfg := config.Load()
 
-	// Configura modo do Gin baseado no ambiente
+	// Set Gin mode based on environment
 	if cfg.App.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	mongoClient, err := mongodb.NewClient(cfg)
 	if err != nil {
-		log.Fatalf("Erro ao conectar ao MongoDB: %v", err)
+		appLog.Fatal().Err(err).Msg("Error connecting to MongoDB")
 	}
 	defer mongoClient.Close()
 
-	router := gin.Default()
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		appLog.Info().
+			Str("method", c.Request.Method).
+			Str("path", c.FullPath()).
+			Str("client_ip", c.ClientIP()).
+			Int("status", c.Writer.Status()).
+			Int("size", c.Writer.Size()).
+			Dur("latency_ms", time.Since(start)).
+			Str("request_id", c.GetHeader("X-Request-ID")).
+			Msg("request")
+	})
 
-	statementHandler := routes.NewStatementHandler(mongoClient)
+	statementHandler := routes.NewStatementHandler(mongoClient, appLog)
 
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -43,7 +58,7 @@ func main() {
 			"environment": cfg.App.Environment,
 		})
 	})
-	router.GET("/statements/:conta_id", statementHandler.GetStatements)
+	router.GET("/statements/:account_id", statementHandler.GetStatements)
 
 	// Configura servidor HTTP com timeouts
 	srv := &http.Server{
@@ -53,11 +68,11 @@ func main() {
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
-	// Inicia servidor em goroutine
+	// Start server in a goroutine
 	go func() {
-		log.Printf("Statement API rodando na porta %s (ambiente: %s)", cfg.Server.Port, cfg.App.Environment)
+		appLog.Info().Str("port", cfg.Server.Port).Str("environment", cfg.App.Environment).Msg("Servidor iniciado")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Erro ao iniciar servidor: %v", err)
+			appLog.Fatal().Err(err).Msg("Erro ao iniciar servidor")
 		}
 	}()
 
@@ -66,13 +81,13 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Desligando servidor...")
+	appLog.Info().Msg("Shutdown signal received, shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatal("Erro ao desligar servidor:", err)
+		appLog.Fatal().Err(err).Msg("Error shutting down server")
 	}
 
-	log.Println("Servidor desligado com sucesso")
+	appLog.Info().Msg("Server shut down successfully")
 }

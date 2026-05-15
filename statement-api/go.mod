@@ -4,6 +4,7 @@ go 1.25.1
 
 require (
 	github.com/gin-gonic/gin v1.11.0
+	github.com/rs/zerolog v1.35.1
 	go.mongodb.org/mongo-driver v1.17.6
 )
 
@@ -23,6 +24,7 @@ require (
 	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421 // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
