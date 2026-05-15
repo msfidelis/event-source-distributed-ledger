@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,7 +22,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-
 func main() {
 	appLog := logger.New()
 	appLog.Info().Msg("Starting Statement API Service")
@@ -38,7 +38,7 @@ func main() {
 	if err != nil {
 		appLog.Fatal().Err(err).Msg("Error connecting to MongoDB")
 	}
-	defer mongoClient.Close()
+	// mongoClient.Close() is called explicitly in ordered shutdown below — no defer to avoid double-close
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
@@ -60,7 +60,7 @@ func main() {
 			Int("status", c.Writer.Status()).
 			Int("size", c.Writer.Size()).
 			Dur("latency_ms", time.Since(start)).
-			Str("request_id", c.GetHeader("X-Request-ID")).
+			Str("correlation_id", c.GetHeader("X-Correlation-ID")).
 			Msg("request")
 	})
 
@@ -73,34 +73,65 @@ func main() {
 	router.GET("/readyz", probeHandler.Readyz)
 	router.GET("/statements/:account_id", statementHandler.GetStatements)
 
-	// Configura servidor HTTP com timeouts
 	srv := &http.Server{
-		Addr:         ":" + cfg.Server.Port,
-		Handler:      router,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
+		Addr:              ":" + cfg.Server.Port,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       cfg.Server.ReadTimeout,
+		WriteTimeout:      cfg.Server.WriteTimeout,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 16,
 	}
 
-	// Start server in a goroutine
+	appLog.Debug().
+		Str("addr", srv.Addr).
+		Dur("read_header_timeout", srv.ReadHeaderTimeout).
+		Dur("read_timeout", srv.ReadTimeout).
+		Dur("write_timeout", srv.WriteTimeout).
+		Dur("idle_timeout", srv.IdleTimeout).
+		Int("max_header_bytes", srv.MaxHeaderBytes).
+		Msg("http server config")
+
+	errCh := make(chan error, 1)
 	go func() {
-		appLog.Info().Str("port", cfg.Server.Port).Str("environment", cfg.App.Environment).Msg("Servidor iniciado")
+		defer func() {
+			if r := recover(); r != nil {
+				appLog.Error().Interface("panic", r).Msg("panic na goroutine do servidor")
+				errCh <- fmt.Errorf("server panic: %v", r)
+			}
+		}()
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			appLog.Fatal().Err(err).Msg("Erro ao iniciar servidor")
+			errCh <- err
 		}
 	}()
 
-	// Aguarda sinal de interrupção para graceful shutdown
+	appLog.Info().Str("port", cfg.Server.Port).Str("environment", cfg.App.Environment).Msg("Servidor iniciado")
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
 
-	appLog.Info().Msg("Shutdown signal received, shutting down server...")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		appLog.Fatal().Err(err).Msg("Error shutting down server")
+	select {
+	case err := <-errCh:
+		appLog.Error().Err(err).Msg("erro no servidor HTTP")
+	case sig := <-quit:
+		appLog.Info().Str("signal", sig.String()).Msg("sinal de shutdown recebido")
 	}
 
-	appLog.Info().Msg("Server shut down successfully")
+	appLog.Info().Msg("iniciando shutdown gracioso")
+
+	// 1. Parar de aceitar novas conexões e drenar as in-flight
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		appLog.Error().Err(err).Msg("erro no shutdown do servidor HTTP")
+	}
+
+	// 2. Fechar MongoDB apenas APÓS o servidor ter drenado
+	if err := mongoClient.Close(); err != nil {
+		appLog.Error().Err(err).Msg("erro ao fechar conexão MongoDB")
+	} else {
+		appLog.Info().Msg("conexão MongoDB fechada com sucesso")
+	}
+
+	appLog.Info().Msg("servidor desligado com sucesso")
 }
