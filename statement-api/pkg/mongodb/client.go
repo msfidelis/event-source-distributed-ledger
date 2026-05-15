@@ -2,11 +2,15 @@ package mongodb
 
 import (
 	"context"
-	"log"
-	"statement-api/pkg/config"
+	"fmt"
 	"time"
 
+	"statement-api/pkg/config"
+	"statement-api/pkg/logger"
+	"statement-api/pkg/observability"
+
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/event"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -44,9 +48,22 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	uri := cfg.GetMongoURI()
 	clientOptions := options.Client().ApplyURI(uri)
 
-	// Set pool size options
 	clientOptions.SetMaxPoolSize(cfg.MongoDB.MaxPoolSize)
 	clientOptions.SetMinPoolSize(cfg.MongoDB.MinPoolSize)
+	clientOptions.SetPoolMonitor(&event.PoolMonitor{
+		Event: func(e *event.PoolEvent) {
+			switch e.Type {
+			case event.ConnectionCreated:
+				observability.MongoConnectionPoolSize.Inc()
+			case event.ConnectionClosed:
+				observability.MongoConnectionPoolSize.Dec()
+			case event.GetSucceeded:
+				observability.MongoConnectionPoolInUse.Inc()
+			case event.ConnectionReturned:
+				observability.MongoConnectionPoolInUse.Dec()
+			}
+		},
+	})
 
 	client, err := mongo.Connect(ctx, clientOptions)
 	if err != nil {
@@ -57,7 +74,8 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		return nil, err
 	}
 
-	log.Printf("[MongoDB] Conexão estabelecida com sucesso: %s", cfg.MongoDB.Database)
+	log := logger.New()
+	log.Info().Str("database", cfg.MongoDB.Database).Msg("Conexão estabelecida com sucesso")
 
 	db := client.Database(cfg.MongoDB.Database)
 
@@ -68,7 +86,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) GetStatements(contaID string, startDate, endDate time.Time, page, itemsPerPage int) (*StatementResult, error) {
+func (c *Client) GetStatements(ctx context.Context, contaID string, startDate, endDate time.Time, page, itemsPerPage int) (*StatementResult, error) {
 	collection := c.database.Collection("transactions")
 
 	filter := bson.M{
@@ -79,39 +97,60 @@ func (c *Client) GetStatements(contaID string, startDate, endDate time.Time, pag
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.config.MongoDB.QueryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.config.MongoDB.QueryTimeout)
 	defer cancel()
 
-	// Conta total de documentos
+	countStart := time.Now()
 	totalItems, err := collection.CountDocuments(ctx, filter)
+	countResult := "success"
 	if err != nil {
-		return nil, err
+		countResult = "error"
+	}
+	observability.MongoOperationDurationSeconds.WithLabelValues("count_documents", "transactions", countResult).Observe(time.Since(countStart).Seconds())
+	if err != nil {
+		return nil, fmt.Errorf("mongo count_documents conta_id=%s: %w", contaID, err)
 	}
 
-	// Calcula skip
 	skip := int64((page - 1) * itemsPerPage)
 
-	// Options para paginação e ordenação
 	findOptions := options.Find().
 		SetSort(bson.D{{Key: "ocorrido_em", Value: -1}}).
 		SetSkip(skip).
 		SetLimit(int64(itemsPerPage))
 
+	findStart := time.Now()
 	cursor, err := collection.Find(ctx, filter, findOptions)
+	findResult := "success"
 	if err != nil {
-		return nil, err
+		findResult = "error"
+	}
+
+	// Métricas
+	observability.
+		MongoOperationDurationSeconds.
+		WithLabelValues("find", "transactions", findResult).
+		Observe(time.Since(findStart).
+			Seconds())
+
+	if err != nil {
+		return nil, fmt.Errorf("mongo find conta_id=%s page=%d: %w", contaID, page, err)
 	}
 	defer cursor.Close(ctx)
 
 	var transactions []Transaction
 	if err := cursor.All(ctx, &transactions); err != nil {
-		return nil, err
+		observability.
+			MongoOperationDurationSeconds.
+			WithLabelValues("cursor_decode", "transactions", "error").Observe(0)
+		return nil, fmt.Errorf("mongo cursor_decode conta_id=%s: %w", contaID, err)
 	}
 
-	// Se não houver transações, retorna slice vazio ao invés de nil
 	if transactions == nil {
 		transactions = []Transaction{}
 	}
+	observability.
+		StatementTransactionsReturned.
+		Observe(float64(len(transactions)))
 
 	// Calcula total de páginas
 	totalPages := int(totalItems) / itemsPerPage
@@ -128,9 +167,14 @@ func (c *Client) GetStatements(contaID string, startDate, endDate time.Time, pag
 	}, nil
 }
 
+func (c *Client) Ping(ctx context.Context) error {
+	return c.client.Ping(ctx, nil)
+}
+
 func (c *Client) Close() error {
 	if c.client != nil {
-		log.Printf("[MongoDB] Fechando conexão")
+		log := logger.New()
+		log.Info().Str("database", c.config.MongoDB.Database).Msg("Fechando conexão")
 		ctx, cancel := context.WithTimeout(context.Background(), c.config.MongoDB.QueryTimeout)
 		defer cancel()
 		return c.client.Disconnect(ctx)
