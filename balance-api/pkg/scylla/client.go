@@ -75,6 +75,11 @@ func NewClient(cfg *config.Config) (*Client, error) {
 				float64(counts.TotalFailures)/float64(counts.Requests) >= 0.5
 		},
 		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
+			log.Warn().
+				Str("breaker", name).
+				Str("from", from.String()).
+				Str("to", to.String()).
+				Msg("circuit breaker state change")
 			observability.CircuitBreakerTransitions.WithLabelValues(name, from.String(), to.String()).Inc()
 			switch to {
 			case gobreaker.StateClosed:
