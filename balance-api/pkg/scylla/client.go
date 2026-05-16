@@ -2,11 +2,12 @@ package scylla
 
 import (
 	"balance-api/pkg/config"
+	"balance-api/pkg/logger"
 	"context"
-	"log"
 	"time"
 
 	"github.com/gocql/gocql"
+	"github.com/rs/zerolog"
 	"github.com/sony/gobreaker/v2"
 )
 
@@ -16,6 +17,7 @@ type Client struct {
 	session *gocql.Session
 	config  *config.Config
 	cb      *gobreaker.CircuitBreaker[float64]
+	log     zerolog.Logger
 }
 
 func NewClient(cfg *config.Config) (*Client, error) {
@@ -49,15 +51,20 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		}
 	}
 
-	log.Printf("[ScyllaDB] Conectando aos hosts: %v", cfg.Scylla.Hosts)
-	log.Printf("[ScyllaDB] Keyspace: %s, Consistency: %s", cfg.Scylla.Keyspace, cfg.Scylla.Consistency)
+	log := logger.Instance()
+
+	log.Info().
+		Strs("hosts", cfg.Scylla.Hosts).
+		Str("keyspace", cfg.Scylla.Keyspace).
+		Str("consistency", cfg.Scylla.Consistency).
+		Msg("conectando ao scylladb")
 
 	session, err := cluster.CreateSession()
 	if err != nil {
 		return nil, err
 	}
 
-	log.Printf("[ScyllaDB] Conexão estabelecida com sucesso")
+	log.Info().Msg("conexao com scylladb estabelecida")
 
 	cb := gobreaker.NewCircuitBreaker[float64](gobreaker.Settings{
 		Name:        "scylla-balance",
@@ -74,6 +81,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		session: session,
 		config:  cfg,
 		cb:      cb,
+		log:     log,
 	}, nil
 }
 
@@ -93,7 +101,7 @@ func (c *Client) Ping(ctx context.Context) error {
 
 func (c *Client) Close() {
 	if c.session != nil {
-		log.Printf("[ScyllaDB] Fechando conexão")
+		c.log.Info().Msg("fechando conexao com scylladb")
 		c.session.Close()
 	}
 }
