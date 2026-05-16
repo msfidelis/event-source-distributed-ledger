@@ -4,13 +4,16 @@ import (
 	"balance-api/pkg/config"
 	"context"
 	"log"
+	"time"
 
 	"github.com/gocql/gocql"
+	"github.com/sony/gobreaker/v2"
 )
 
 type Client struct {
 	session *gocql.Session
 	config  *config.Config
+	cb      *gobreaker.CircuitBreaker[float64]
 }
 
 func NewClient(cfg *config.Config) (*Client, error) {
@@ -54,19 +57,33 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 	log.Printf("[ScyllaDB] Conexão estabelecida com sucesso")
 
+	cb := gobreaker.NewCircuitBreaker[float64](gobreaker.Settings{
+		Name:        "scylla-balance",
+		MaxRequests: 5,
+		Interval:    30 * time.Second,
+		Timeout:     10 * time.Second,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.Requests >= 20 &&
+				float64(counts.TotalFailures)/float64(counts.Requests) >= 0.5
+		},
+	})
+
 	return &Client{
 		session: session,
 		config:  cfg,
+		cb:      cb,
 	}, nil
 }
 
 func (c *Client) GetBalance(ctx context.Context, id gocql.UUID) (float64, error) {
-	var balance float64
-	query := `SELECT balance FROM balances WHERE id = ?`
-	if err := c.session.Query(query, id).WithContext(ctx).Scan(&balance); err != nil {
-		return 0, err
-	}
-	return balance, nil
+	const query = `SELECT balance FROM balances WHERE id = ?`
+	return c.cb.Execute(func() (float64, error) {
+		var balance float64
+		if err := c.session.Query(query, id).WithContext(ctx).Idempotent(true).Scan(&balance); err != nil {
+			return 0, err
+		}
+		return balance, nil
+	})
 }
 
 func (c *Client) Close() {
