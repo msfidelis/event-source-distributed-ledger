@@ -34,18 +34,12 @@ func main() {
 	router := gin.Default()
 
 	balanceHandler := routes.NewBalanceHandler(scyllaClient)
+	probeHandler := routes.NewProbeHandler(scyllaClient)
 
-	// Health check endpoint
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"status":      "ok",
-			"service":     "balance-api",
-			"environment": cfg.App.Environment,
-		})
-	})
-
-	// Balance endpoints
 	router.GET("/balance/:account_id", balanceHandler.GetBalance)
+	router.GET("/health", probeHandler.Health)
+	router.GET("/livez", probeHandler.Live)
+	router.GET("/readyz", probeHandler.Ready)
 
 	// Configure HTTP server with timeouts
 	srv := &http.Server{

@@ -87,6 +87,10 @@ func (c *Client) GetBalance(ctx context.Context, id gocql.UUID) (float64, error)
 	})
 }
 
+func (c *Client) Ping(ctx context.Context) error {
+	return c.session.Query("SELECT now() FROM system.local").WithContext(ctx).Exec()
+}
+
 func (c *Client) Close() {
 	if c.session != nil {
 		log.Printf("[ScyllaDB] Fechando conexão")
