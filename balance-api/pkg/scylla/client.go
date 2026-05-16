@@ -10,6 +10,8 @@ import (
 	"github.com/sony/gobreaker/v2"
 )
 
+const balanceQuery = `SELECT balance FROM balances WHERE id = ?`
+
 type Client struct {
 	session *gocql.Session
 	config  *config.Config
@@ -76,10 +78,9 @@ func NewClient(cfg *config.Config) (*Client, error) {
 }
 
 func (c *Client) GetBalance(ctx context.Context, id gocql.UUID) (float64, error) {
-	const query = `SELECT balance FROM balances WHERE id = ?`
 	return c.cb.Execute(func() (float64, error) {
 		var balance float64
-		if err := c.session.Query(query, id).WithContext(ctx).Idempotent(true).Scan(&balance); err != nil {
+		if err := c.session.Query(balanceQuery, id).WithContext(ctx).Idempotent(true).Scan(&balance); err != nil {
 			return 0, err
 		}
 		return balance, nil
