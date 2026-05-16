@@ -155,7 +155,7 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 			Str("correlation_id", correlationID).
 			Str("account_id", movimentacao.ContaID.String()).
 			Str("transaction_id", movimentacao.MovimentacaoID.String()).
-			Msg("Evento LIberado pelo Rate Limiter")
+			Msg("Evento Liberado pelo Rate Limiter")
 
 		ctxRL := context.Background()
 		allowed, err := l.rateLimiter.ShouldRateLimit(ctxRL, "ledger-transactions", "account", movimentacao.ContaID.String())
@@ -189,8 +189,51 @@ func (l *Listener) Handle(key, value []byte, correlationID string) error {
 	// Executa as operações de event sourcing e balance dentro de uma transaction
 	txErr := l.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 
+		// Idempotência: garante processamento exactly-once mesmo em reentregas Kafka.
+		// O INSERT com ON CONFLICT DO NOTHING é atômico dentro da mesma transação
+		// que modifica o saldo — se o processo crasha após o commit mas antes do
+		// MarkMessage, o Kafka reentrega e esta linha retorna rowsAffected=0 (skip).
+
+		logger.Info().
+			Str("operation", "nova_transacao").
+			Str("correlation_id", correlationID).
+			Str("event_id", movimentacao.MovimentacaoID.String()).
+			Str("topic", l.topic).
+			Msg("Verificando idempotência da transação")
+
+		result, err := tx.NewInsert().
+			Model(&models.ProcessedMessage{
+				EventID:     movimentacao.MovimentacaoID.String(),
+				Topic:       l.topic,
+				ProcessedAt: time.Now(),
+			}).
+			On("CONFLICT (event_id) DO NOTHING").
+			Exec(ctx)
+		if err != nil {
+			return fmt.Errorf("erro ao verificar idempotência: %w", err)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("erro ao ler rows affected: %w", err)
+		}
+		if rowsAffected == 0 {
+			logger.Info().
+				Str("operation", "nova_transacao").
+				Str("correlation_id", correlationID).
+				Str("event_id", movimentacao.MovimentacaoID.String()).
+				Str("topic", l.topic).
+				Msg("Evento já processado — skip idempotente")
+			return nil
+		}
+
+		logger.Info().
+			Str("operation", "nova_transacao").
+			Str("correlation_id", correlationID).
+			Str("event_id", movimentacao.MovimentacaoID.String()).
+			Str("topic", l.topic).
+			Msg("Idempotencia verificada — processando evento")
+
 		// Persiste no event store
-		var err error
 		eventID, err = l.saveEventTx(ctx, tx, movimentacao.ContaID, "Account",
 			events.EventTypeContaMovimentacao, dataBytes, envelope.Metadata, correlationID)
 		if err != nil {

@@ -33,6 +33,16 @@ type Event struct {
 	OccurredAt    time.Time `bun:"occurred_at,notnull,default:current_timestamp"`
 }
 
+// ProcessedMessage é o registro de idempotência: garante que cada event_id seja
+// processado exatamente uma vez, mesmo em reentregas at-least-once do Kafka.
+type ProcessedMessage struct {
+	bun.BaseModel `bun:"table:processed_messages"`
+
+	EventID     string    `bun:"event_id,pk"`
+	Topic       string    `bun:"topic,notnull"`
+	ProcessedAt time.Time `bun:"processed_at,notnull"`
+}
+
 // Transaction representa uma transação bancária
 type Transaction struct {
 	bun.BaseModel `bun:"table:transactions,alias:t"`
