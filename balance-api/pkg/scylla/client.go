@@ -3,6 +3,7 @@ package scylla
 import (
 	"balance-api/pkg/config"
 	"balance-api/pkg/logger"
+	"balance-api/pkg/observability"
 	"context"
 	"time"
 
@@ -24,7 +25,6 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	cluster := gocql.NewCluster(cfg.Scylla.Hosts...)
 	cluster.Keyspace = cfg.Scylla.Keyspace
 
-	// Set consistency level
 	switch cfg.Scylla.Consistency {
 	case "ONE":
 		cluster.Consistency = gocql.One
@@ -43,7 +43,6 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	cluster.ProtoVersion = cfg.Scylla.ProtoVersion
 	cluster.RetryPolicy = &gocql.SimpleRetryPolicy{NumRetries: cfg.Scylla.RetryAttempts}
 
-	// Set authentication if provided
 	if cfg.Scylla.Username != "" && cfg.Scylla.Password != "" {
 		cluster.Authenticator = gocql.PasswordAuthenticator{
 			Username: cfg.Scylla.Username,
@@ -75,7 +74,21 @@ func NewClient(cfg *config.Config) (*Client, error) {
 			return counts.Requests >= 20 &&
 				float64(counts.TotalFailures)/float64(counts.Requests) >= 0.5
 		},
+		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
+			observability.CircuitBreakerTransitions.WithLabelValues(name, from.String(), to.String()).Inc()
+			switch to {
+			case gobreaker.StateClosed:
+				observability.CircuitBreakerState.WithLabelValues(name).Set(0)
+			case gobreaker.StateHalfOpen:
+				observability.CircuitBreakerState.WithLabelValues(name).Set(1)
+			case gobreaker.StateOpen:
+				observability.CircuitBreakerState.WithLabelValues(name).Set(2)
+			}
+		},
 	})
+
+	// estado inicial: closed
+	observability.CircuitBreakerState.WithLabelValues("scylla-balance").Set(0)
 
 	return &Client{
 		session: session,
@@ -86,13 +99,25 @@ func NewClient(cfg *config.Config) (*Client, error) {
 }
 
 func (c *Client) GetBalance(ctx context.Context, id gocql.UUID) (float64, error) {
-	return c.cb.Execute(func() (float64, error) {
+	start := time.Now()
+
+	balance, err := c.cb.Execute(func() (float64, error) {
 		var balance float64
 		if err := c.session.Query(balanceQuery, id).WithContext(ctx).Idempotent(true).Scan(&balance); err != nil {
 			return 0, err
 		}
 		return balance, nil
 	})
+
+	duration := time.Since(start).Seconds()
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	observability.ScyllaQueriesTotal.WithLabelValues("get_balance", result).Inc()
+	observability.ScyllaQueryDurationSeconds.WithLabelValues("get_balance").Observe(duration)
+
+	return balance, err
 }
 
 func (c *Client) Ping(ctx context.Context) error {

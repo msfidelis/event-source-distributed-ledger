@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"balance-api/pkg/logger"
+	"balance-api/pkg/observability"
 	"balance-api/pkg/scylla"
 
 	"github.com/gin-gonic/gin"
@@ -50,6 +51,7 @@ func (h *BalanceHandler) GetBalance(c *gin.Context) {
 	if err != nil {
 		if err == gocql.ErrNotFound {
 			h.log.Warn().Str("account_id", accountID).Msg("account not found")
+			observability.BusinessLookupsTotal.WithLabelValues("not_found").Inc()
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": "Account not found",
 			})
@@ -57,6 +59,7 @@ func (h *BalanceHandler) GetBalance(c *gin.Context) {
 		}
 
 		h.log.Error().Str("account_id", accountID).Err(err).Msg("error fetching balance")
+		observability.BusinessLookupsTotal.WithLabelValues("error").Inc()
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Error fetching balance",
 		})
@@ -64,6 +67,7 @@ func (h *BalanceHandler) GetBalance(c *gin.Context) {
 	}
 
 	h.log.Info().Str("account_id", accountID).Msg("balance returned")
+	observability.BusinessLookupsTotal.WithLabelValues("found").Inc()
 	c.JSON(http.StatusOK, BalanceResponse{
 		ID:      accountID,
 		Balance: balance,
