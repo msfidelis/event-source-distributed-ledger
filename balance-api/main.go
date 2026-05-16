@@ -9,10 +9,13 @@ import (
 
 	"balance-api/pkg/config"
 	"balance-api/pkg/logger"
+	"balance-api/pkg/metrics"
+	"balance-api/pkg/middleware"
 	"balance-api/pkg/scylla"
 	"balance-api/routes"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 )
 
@@ -37,12 +40,16 @@ func main() {
 		log.Fatal().Err(err).Msg("erro ao conectar ao scylladb")
 	}
 
+	m := metrics.New()
+
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(middleware.RequestLogger())
 
 	balanceHandler := routes.NewBalanceHandler(scyllaClient)
 	probeHandler := routes.NewProbeHandler(scyllaClient)
 
+	router.GET("/metrics", gin.WrapH(promhttp.HandlerFor(m.Registry, promhttp.HandlerOpts{})))
 	router.GET("/balance/:account_id", balanceHandler.GetBalance)
 	router.GET("/health", probeHandler.Health)
 	router.GET("/livez", probeHandler.Live)
