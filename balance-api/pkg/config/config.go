@@ -1,11 +1,12 @@
 package config
 
 import (
-	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"balance-api/pkg/logger"
 )
 
 // Config holds all application configuration
@@ -73,12 +74,14 @@ func Load() *Config {
 		},
 	}
 
-	log.Printf("[Config] Loaded configuration:")
-	log.Printf("  - ScyllaDB Hosts: %v", config.Scylla.Hosts)
-	log.Printf("  - ScyllaDB Keyspace: %s", config.Scylla.Keyspace)
-	log.Printf("  - ScyllaDB Consistency: %s", config.Scylla.Consistency)
-	log.Printf("  - Server Port: %s", config.Server.Port)
-	log.Printf("  - Environment: %s", config.App.Environment)
+	log := logger.Instance()
+	log.Info().
+		Strs("scylla_hosts", config.Scylla.Hosts).
+		Str("keyspace", config.Scylla.Keyspace).
+		Str("consistency", config.Scylla.Consistency).
+		Str("port", config.Server.Port).
+		Str("environment", config.App.Environment).
+		Msg("configuracao carregada")
 
 	return config
 }
