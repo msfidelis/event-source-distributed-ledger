@@ -52,6 +52,11 @@ type KafkaConfig struct {
 	GroupAccountListener     string
 	GroupTransactionListener string
 	GroupRehydrateListener   string
+
+	// DLQ Topics (Dead Letter Queue) — convenção: {topico_original}_dlq
+	TopicContaCriadaDLQ       string
+	TopicContaMovimentacaoDLQ string
+	TopicRehydratateDLQ       string
 }
 
 // AppConfig holds application-level settings
@@ -96,6 +101,11 @@ func Load() *Config {
 			GroupAccountListener:     getEnv("KAFKA_GROUP_ACCOUNT", "ledger-account-group"),
 			GroupTransactionListener: getEnv("KAFKA_GROUP_TRANSACTION", "ledger-transaction-group"),
 			GroupRehydrateListener:   getEnv("KAFKA_GROUP_REHYDRATE", "ledger-rehydrate-group"),
+
+			// DLQ Topics
+			TopicContaCriadaDLQ:       getEnv("KAFKA_TOPIC_CONTA_CRIADA_DLQ", "conta_criada_dlq"),
+			TopicContaMovimentacaoDLQ: getEnv("KAFKA_TOPIC_CONTA_MOVIMENTACAO_DLQ", "conta_movimentacao_dlq"),
+			TopicRehydratateDLQ:       getEnv("KAFKA_TOPIC_REHYDRATATE_DLQ", "ledger_rehydratate_transactions_dlq"),
 		},
 		App: AppConfig{
 			Port:           getEnv("PORT", "8081"),

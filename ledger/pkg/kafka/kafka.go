@@ -2,31 +2,75 @@ package kafka
 
 import (
 	"context"
-	"ledger/pkg/logger"
+	"encoding/json"
+	"errors"
+	"net"
+	"strconv"
 	"strings"
+	"time"
+
+	"ledger/pkg/logger"
 
 	"github.com/IBM/sarama"
 	"github.com/google/uuid"
 )
 
-// Consumer representa um consumidor Kafka usando Sarama
+// errorClass categorizes handler errors to decide retry vs DLQ routing.
+type errorClass int
+
+const (
+	errClassNil       errorClass = iota
+	errClassRetryable            // transient: network, DB, timeout — will retry up to maxRetries
+	errClassPermanent            // deterministic: parse, validation — sent to DLQ immediately
+)
+
+// classifyHandlerError determines whether a handler error should be retried.
+// Unknown errors default to retryable: they will exhaust maxRetries then go to DLQ.
+func classifyHandlerError(err error) errorClass {
+	if err == nil {
+		return errClassNil
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return errClassRetryable
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return errClassRetryable
+	}
+	var jsonType *json.UnmarshalTypeError
+	if errors.As(err, &jsonType) {
+		return errClassPermanent
+	}
+	var jsonSyntax *json.SyntaxError
+	if errors.As(err, &jsonSyntax) {
+		return errClassPermanent
+	}
+	return errClassRetryable
+}
+
+// Consumer represents a Kafka consumer using Sarama.
 type Consumer struct {
 	brokers       []string
 	topic         string
 	groupID       string
 	consumerGroup sarama.ConsumerGroup
+	dlqProducer   *Producer
+	dlqTopic      string
 }
 
-// ConsumerGroupHandler implementa sarama.ConsumerGroupHandler
+// ConsumerGroupHandler implements sarama.ConsumerGroupHandler.
 type ConsumerGroupHandler struct {
-	handler MessageHandler
-	topic   string
+	handler      MessageHandler
+	topic        string
+	dlqProducer  *Producer
+	dlqTopic     string
+	retryBackoff func(attempt int) time.Duration // nil = exponential default
 }
 
-// MessageHandler é a função que processa cada mensagem com correlationID
+// MessageHandler is the function that processes each Kafka message.
 type MessageHandler func(key, value []byte, correlationID string) error
 
-// NewConsumer cria um novo consumer Kafka usando Sarama
+// NewConsumer creates a new Kafka consumer.
 func NewConsumer(brokers []string, topic, groupID string) *Consumer {
 	return &Consumer{
 		brokers: brokers,
@@ -35,30 +79,73 @@ func NewConsumer(brokers []string, topic, groupID string) *Consumer {
 	}
 }
 
-// ParseBrokers converte string de brokers separados por vírgula em slice
+// WithDLQ configures a Dead Letter Queue producer and topic for the consumer.
+// Messages that exhaust all retries are published to dlqTopic before being committed.
+func (c *Consumer) WithDLQ(producer *Producer, dlqTopic string) *Consumer {
+	c.dlqProducer = producer
+	c.dlqTopic = dlqTopic
+	return c
+}
+
+// ParseBrokers converts a comma-separated broker string to a slice.
 func ParseBrokers(brokers string) []string {
 	return strings.Split(brokers, ",")
 }
 
-// Setup é executado no início de uma nova sessão, antes de ConsumeClaim
+// Setup is called at the beginning of a new consumer group session.
 func (h ConsumerGroupHandler) Setup(sarama.ConsumerGroupSession) error {
-	logger := logger.Instance()
-	logger.Info().Str("topic", h.topic).Msg("Consumer group session iniciada")
+	log := logger.Instance()
+	log.Info().Str("topic", h.topic).Msg("Consumer group session iniciada")
 	return nil
 }
 
-// Cleanup é executado no final da sessão, depois de todos os ConsumeClaim
+// Cleanup is called at the end of a consumer group session.
 func (h ConsumerGroupHandler) Cleanup(sarama.ConsumerGroupSession) error {
-	logger := logger.Instance()
-	logger.Info().Str("topic", h.topic).Msg("Consumer group session finalizada")
+	log := logger.Instance()
+	log.Info().Str("topic", h.topic).Msg("Consumer group session finalizada")
 	return nil
 }
 
-// ConsumeClaim processa mensagens de uma partição específica
+// publishToDLQ publishes a failed message to the DLQ topic with diagnostic headers.
+// Returns nil (no-op) if no DLQ producer is configured.
+func (h ConsumerGroupHandler) publishToDLQ(
+	msg *sarama.ConsumerMessage,
+	handlerErr error,
+	correlationID string,
+	attempts int,
+) error {
+	if h.dlqProducer == nil {
+		return nil
+	}
+	return h.dlqProducer.PublishWithHeaders(h.dlqTopic, msg.Key, msg.Value, map[string]string{
+		"original_topic": h.topic,
+		"error_message":  handlerErr.Error(),
+		"failed_at":      time.Now().UTC().Format(time.RFC3339),
+		"retry_attempts": strconv.Itoa(attempts),
+		"correlation_id": correlationID,
+	})
+}
+
+func defaultRetryBackoff(attempt int) time.Duration {
+	return time.Duration(1<<uint(attempt)) * time.Second
+}
+
+// ConsumeClaim processes messages from a specific partition.
+//
+// Retry policy:
+//   - retryable errors (network, timeout, DB): up to maxRetries with exponential backoff
+//   - permanent errors (parse, validation): sent to DLQ immediately, no retry
+//   - if DLQ publish fails: message is NOT marked — forces rebalance for redelivery
 func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	const maxRetries = 3
+
+	log := logger.Instance()
 	msgCount := 0
 
-	logger := logger.Instance()
+	backoff := h.retryBackoff
+	if backoff == nil {
+		backoff = defaultRetryBackoff
+	}
 
 	for {
 		select {
@@ -68,14 +155,10 @@ func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, 
 			}
 
 			msgCount++
-
-			// Extrai ou gera correlationID dos headers
 			correlationID := extractOrGenerateCorrelationID(message.Headers)
 
-			// Log das primeiras 10 mensagens e depois a cada 1000
 			if msgCount <= 10 || msgCount%1000 == 0 {
-
-				logger.Info().
+				log.Info().
 					Str("topic", h.topic).
 					Int("message_count", msgCount).
 					Int32("partition", message.Partition).
@@ -84,17 +167,51 @@ func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, 
 					Msg("Mensagem recebida")
 			}
 
-			// Processa a mensagem com correlationID
-			if err := h.handler(message.Key, message.Value, correlationID); err != nil {
-				logger.Error().
-					Err(err).
+			var lastErr error
+			for attempt := 0; attempt <= maxRetries; attempt++ {
+				lastErr = h.handler(message.Key, message.Value, correlationID)
+				if lastErr == nil {
+					break
+				}
+
+				log.Warn().
+					Err(lastErr).
+					Int("attempt", attempt+1).
+					Int("max_retries", maxRetries).
 					Int64("offset", message.Offset).
 					Str("correlation_id", correlationID).
-					Msg("Erro ao processar o evento")
-				// Mesmo com erro, marca a mensagem como processada para não travar o consumer
+					Msg("Erro ao processar mensagem")
+
+				if classifyHandlerError(lastErr) == errClassPermanent {
+					break
+				}
+
+				if attempt < maxRetries {
+					select {
+					case <-time.After(backoff(attempt)):
+					case <-session.Context().Done():
+						return nil
+					}
+				}
 			}
 
-			// Marca a mensagem como processada (commit)
+			if lastErr != nil {
+				log.Error().
+					Err(lastErr).
+					Int64("offset", message.Offset).
+					Str("correlation_id", correlationID).
+					Msg("Falha definitiva ao processar mensagem — enviando para DLQ")
+
+				if dlqErr := h.publishToDLQ(message, lastErr, correlationID, maxRetries); dlqErr != nil {
+					log.Error().
+						Err(dlqErr).
+						Int64("offset", message.Offset).
+						Msg("Falha ao publicar no DLQ — não marcando mensagem para forçar rebalance")
+					continue
+				}
+			}
+
+			// Only reached when handler succeeded or message was safely sent to DLQ.
 			session.MarkMessage(message, "")
 
 		case <-session.Context().Done():
@@ -103,98 +220,91 @@ func (h ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, 
 	}
 }
 
-// Consume inicia o consumo de mensagens do tópico
+// Consume starts consuming messages from the topic.
 func (c *Consumer) Consume(ctx context.Context, handler MessageHandler) error {
-	logger := logger.Instance()
+	log := logger.Instance()
 	config := sarama.NewConfig()
 
-	// Configurações de consumer
 	config.Consumer.Return.Errors = true
-	config.Consumer.Offsets.Initial = sarama.OffsetOldest // Começa do mais antigo
+	config.Consumer.Offsets.Initial = sarama.OffsetOldest
 	config.Consumer.Group.Rebalance.Strategy = sarama.NewBalanceStrategyRoundRobin()
 
-	// Configurações de fetch - otimizadas para baixa latência
-	config.Consumer.Fetch.Min = 1               // 1 byte - responde imediatamente
-	config.Consumer.Fetch.Default = 1024 * 1024 // 1MB
-	config.Consumer.MaxProcessingTime = 1_000   // 1 segundo (em ms)
+	config.Consumer.Fetch.Min = 1
+	config.Consumer.Fetch.Default = 1024 * 1024
 
-	// Auto-commit a cada 1 segundo
+	config.Consumer.MaxProcessingTime = 30 * time.Second
 	config.Consumer.Offsets.AutoCommit.Enable = true
-	config.Consumer.Offsets.AutoCommit.Interval = 1_000 // 1 segundo (em ms)
+	config.Consumer.Offsets.AutoCommit.Interval = 1 * time.Second
+	config.Consumer.Group.Session.Timeout = 30 * time.Second
+	config.Consumer.Group.Heartbeat.Interval = 3 * time.Second
+	config.Consumer.Group.Rebalance.Timeout = 60 * time.Second
 
-	// Metadata e versão
 	config.Version = sarama.V2_6_0_0
 	config.ClientID = c.groupID
 
-	logger.Info().
+	log.Info().
 		Strs("brokers", c.brokers).
 		Str("topic", c.topic).
 		Str("group_id", c.groupID).
 		Msg("Conectando aos brokers")
 
-	// Cria o consumer group
 	consumerGroup, err := sarama.NewConsumerGroup(c.brokers, c.groupID, config)
 	if err != nil {
 		return err
 	}
 	c.consumerGroup = consumerGroup
 
-	// Handler de mensagens
 	groupHandler := ConsumerGroupHandler{
-		handler: handler,
-		topic:   c.topic,
+		handler:     handler,
+		topic:       c.topic,
+		dlqProducer: c.dlqProducer,
+		dlqTopic:    c.dlqTopic,
 	}
 
-	// Goroutine para logar erros do consumer group
 	go func() {
 		for err := range consumerGroup.Errors() {
 			if err != nil {
-				logger.Error().Err(err).Msg("Erro no consumer group")
+				log.Error().Err(err).Msg("Erro no consumer group")
 			}
 		}
 	}()
 
-	// Loop principal do consumer
-	logger.Info().Str("topic", c.topic).Msg("Iniciando consumo de mensagens do tópico")
+	log.Info().Str("topic", c.topic).Msg("Iniciando consumo de mensagens do tópico")
 
 	for {
-		// Consome do tópico
 		topics := []string{c.topic}
 		if err := consumerGroup.Consume(ctx, topics, groupHandler); err != nil {
-			logger.Error().Err(err).Msg("Erro ao consumir mensagens")
+			log.Error().Err(err).Msg("Erro ao consumir mensagens")
 			return err
 		}
-
-		// Se o context foi cancelado, sai do loop
 		if ctx.Err() != nil {
-			logger.Info().Str("topic", c.topic).Msg("Consumer cancelado")
+			log.Info().Str("topic", c.topic).Msg("Consumer cancelado")
 			return nil
 		}
 	}
 }
 
-// Close fecha o consumer
+// Close gracefully shuts down the consumer.
 func (c *Consumer) Close() error {
 	if c.consumerGroup != nil {
-		logger := logger.Instance()
-		logger.Info().Str("topic", c.topic).Msg("Fechando consumer")
+		log := logger.Instance()
+		log.Info().Str("topic", c.topic).Msg("Fechando consumer")
 		return c.consumerGroup.Close()
 	}
 	return nil
 }
 
-// Producer representa um produtor Kafka usando Sarama
+// Producer represents a Kafka producer using Sarama.
 type Producer struct {
 	producer sarama.SyncProducer
 }
 
-// NewProducer cria um novo produtor Kafka
+// NewProducer creates a new Kafka producer.
 func NewProducer(brokers []string) (*Producer, error) {
-
-	logger := logger.Instance()
+	log := logger.Instance()
 
 	config := sarama.NewConfig()
-	config.Producer.RequiredAcks = sarama.WaitForLocal // Aguarda confirmação do líder
+	config.Producer.RequiredAcks = sarama.WaitForLocal
 	config.Producer.Compression = sarama.CompressionSnappy
 	config.Producer.Return.Successes = true
 	config.Version = sarama.V2_6_0_0
@@ -204,19 +314,17 @@ func NewProducer(brokers []string) (*Producer, error) {
 		return nil, err
 	}
 
-	logger.Info().Strs("brokers", brokers).Msg("Produtor criado")
+	log.Info().Strs("brokers", brokers).Msg("Produtor criado")
 
-	return &Producer{
-		producer: producer,
-	}, nil
+	return &Producer{producer: producer}, nil
 }
 
-// Publish publica uma mensagem em um tópico específico
+// Publish publishes a message to a specific topic.
 func (p *Producer) Publish(topic string, key, value []byte) error {
 	return p.PublishWithHeaders(topic, key, value, nil)
 }
 
-// PublishWithHeaders publica uma mensagem em um tópico específico com headers
+// PublishWithHeaders publishes a message with custom headers.
 func (p *Producer) PublishWithHeaders(topic string, key, value []byte, headers map[string]string) error {
 	msg := &sarama.ProducerMessage{
 		Topic: topic,
@@ -224,7 +332,6 @@ func (p *Producer) PublishWithHeaders(topic string, key, value []byte, headers m
 		Value: sarama.ByteEncoder(value),
 	}
 
-	// Adiciona headers se fornecidos
 	if headers != nil {
 		for k, v := range headers {
 			msg.Headers = append(msg.Headers, sarama.RecordHeader{
@@ -238,23 +345,22 @@ func (p *Producer) PublishWithHeaders(topic string, key, value []byte, headers m
 	return err
 }
 
-// extractOrGenerateCorrelationID extrai o correlationID dos headers ou gera um novo UUID
+// Close gracefully shuts down the producer.
+func (p *Producer) Close() error {
+	if p.producer != nil {
+		log := logger.Instance()
+		log.Info().Msg("Fechando produtor")
+		return p.producer.Close()
+	}
+	return nil
+}
+
+// extractOrGenerateCorrelationID extracts the correlationID from headers or generates a new UUID.
 func extractOrGenerateCorrelationID(headers []*sarama.RecordHeader) string {
 	for _, header := range headers {
 		if string(header.Key) == "correlationID" || string(header.Key) == "correlation_id" {
 			return string(header.Value)
 		}
 	}
-	// Se não encontrou, gera um novo UUID
 	return uuid.New().String()
-}
-
-// Close fecha o produtor
-func (p *Producer) Close() error {
-	if p.producer != nil {
-		logger := logger.Instance()
-		logger.Info().Msg("Fechando produtor")
-		return p.producer.Close()
-	}
-	return nil
 }
