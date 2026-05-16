@@ -2,6 +2,7 @@ package scylla
 
 import (
 	"balance-api/pkg/config"
+	"context"
 	"log"
 
 	"github.com/gocql/gocql"
@@ -59,20 +60,12 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) GetBalance(id string) (float64, error) {
+func (c *Client) GetBalance(ctx context.Context, id gocql.UUID) (float64, error) {
 	var balance float64
-
 	query := `SELECT balance FROM balances WHERE id = ?`
-
-	uuid, err := gocql.ParseUUID(id)
-	if err != nil {
+	if err := c.session.Query(query, id).WithContext(ctx).Scan(&balance); err != nil {
 		return 0, err
 	}
-
-	if err := c.session.Query(query, uuid).Scan(&balance); err != nil {
-		return 0, err
-	}
-
 	return balance, nil
 }
 

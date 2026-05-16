@@ -1,7 +1,9 @@
 package routes
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"balance-api/pkg/scylla"
 
@@ -27,15 +29,19 @@ func NewBalanceHandler(scyllaClient *scylla.Client) *BalanceHandler {
 func (h *BalanceHandler) GetBalance(c *gin.Context) {
 	accountID := c.Param("account_id")
 
-	// Valida se é um UUID válido
-	if _, err := gocql.ParseUUID(accountID); err != nil {
+	uuid, err := gocql.ParseUUID(accountID)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "Invalid account ID format",
 		})
 		return
 	}
 
-	balance, err := h.scyllaClient.GetBalance(accountID)
+	const balanceLookupSLA = 500 * time.Millisecond
+	ctx, cancel := context.WithTimeout(c.Request.Context(), balanceLookupSLA)
+	defer cancel()
+
+	balance, err := h.scyllaClient.GetBalance(ctx, uuid)
 	if err != nil {
 		if err == gocql.ErrNotFound {
 			c.JSON(http.StatusNotFound, gin.H{
