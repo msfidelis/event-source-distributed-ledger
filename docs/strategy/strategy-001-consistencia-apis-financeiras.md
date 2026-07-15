@@ -12,8 +12,6 @@
 
 Entre fevereiro e maio de 2026, o time percorreu um ciclo completo — proposta ([RFC-001](../rfcs/RFC-001-api-simulacao-debito-credito.md)), incidente em produção, três alternativas descartadas ([RFC-003](../rfcs/RFC-003-consistencia-forte-scylladb.md), [RFC-004](../rfcs/RFC-004-simulacao-sincrona-embarcada-ledger.md), [RFC-005](../rfcs/RFC-005-cache-aside-saldo-simulacao.md)) e uma solução aceita ([RFC-006](../rfcs/RFC-006-api-consulta-saldo-transacional.md), que absorveu o [RFC-007](../rfcs/RFC-007-api-simulacao-debito-credito-v2.md) na revisão final) — para resolver um problema que, em retrospecto, era sempre o mesmo: **um consumidor usou um read model com o contrato de consistência errado para a decisão que precisava tomar.**
 
-Este documento existe para que a próxima vez que alguém precisar de uma nova API sobre o Ledger, a pergunta "qual fonte de dados eu uso?" tenha uma resposta padrão — sem precisar reviver o Incidente #2026-118 nem redescobrir, por tentativa e erro, por que ScyllaDB-com-mais-consistência e simulação-embarcada-no-Ledger não funcionam.
-
 ## Princípios
 
 ### 1. O Postgres do Ledger é a única fonte da verdade
