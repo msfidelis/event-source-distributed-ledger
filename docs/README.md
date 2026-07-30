@@ -24,6 +24,7 @@ Um canal de pagamento precisa saber, antes de efetivar um débito, **se a opera�
 | 2026-05-20 | [ADR-0005](adrs/ADR-0005-servico-simulacao-desacoplado.md) — **Merged** | Racional original de serviço desacoplado; fundida no ADR-0002 na mesma data |
 | 2026-05-20 | *Revisão RFC-006/ADR-0002* | Fusão final: `simulation-api` nasce lendo a réplica **e** aplicando a regra de simulação no mesmo processo, sem o segundo serviço (`ledger-query-api`) originalmente previsto |
 | 2026-06-01 | [Strategy Doc](strategy/strategy-001-consistencia-apis-financeiras.md) | Consolida os princípios de consistência para qualquer API financeira futura |
+| 2026-06-01 | [Tech Spec — spec-001](specs/spec-001-simulation-api.md) | Documenta a implementação de referência do `simulation-api` (stack, configuração, contratos, observabilidade e testes), separada do Strategy Doc |
 
 ## Como ler isso como palestra
 
@@ -32,9 +33,11 @@ Um canal de pagamento precisa saber, antes de efetivar um débito, **se a opera�
 3. **RFC-002 → RFC-003/004/005** — o processo de descartar alternativas *com registro*, não apenas na cabeça de quem decidiu. Cada RFC descartada tem uma ADR irmã explicando o "não" para a posteridade.
 4. **RFC-006 + ADR-0002 (absorvendo RFC-007/ADR-0005)** — a solução aceita, por que ela não repete o erro original, e por que dois serviços viraram um só: RFCs e ADRs também podem ser fundidas quando a implementação revela indireção desnecessária — e essa fusão fica registrada, não escondida.
 5. **Strategy Doc** — o aprendizado generalizado: uma regra que qualquer API financeira futura no monorepo deve seguir, para não reabrir a mesma discussão a cada novo caso de uso.
+6. **Tech Spec** — a implementação de referência que materializa esse aprendizado em código: stack, configuração, contratos e observabilidade, separada do documento estratégico para que cada um evolua no seu próprio ritmo.
 
 ## Convenções usadas
 
 - **RFC** (`docs/rfcs/`): proposta de mudança técnica, decidida ou em decisão. Estado no cabeçalho (`Draft`, `Accepted`, `Rejected`, `Superseded`).
 - **ADR** (`docs/adrs/`): registro imutável de uma decisão de arquitetura já tomada, incluindo decisões de **não fazer** algo. Nunca é editado após aceito — decisões que mudam geram uma nova ADR que supersede a anterior.
-- **Strategy Doc** (`docs/strategy/`): documento vivo, revisado periodicamente, que consolida princípios extraídos de múltiplas RFCs/ADRs em uma diretriz reutilizável.
+- **Strategy Doc** (`docs/strategy/`): documento vivo, revisado periodicamente, que consolida princípios de negócio e de arquitetura extraídos de múltiplas RFCs/ADRs em uma diretriz reutilizável — o quê e o porquê, não o como.
+- **Tech Spec** (`docs/specs/`): documento de implementação que materializa em código os princípios de um Strategy Doc ou as decisões de uma ADR — stack, estrutura de diretórios, configuração, contratos de API, métricas e estratégia de testes. O como.
